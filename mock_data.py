@@ -144,6 +144,11 @@ def generate_users(rng: random.Random, user_count: int) -> pd.DataFrame:
         activated = rng.random() < traits["activation_rate"]
         escalated = rng.random() < traits["escalation_rate"]
         satisfaction = round(clamp(rng.uniform(*traits["satisfaction"]) - (0.35 if escalated else 0), 1.0, 5.0), 1)
+        helpfulness = round(clamp(satisfaction + rng.gauss(0.05, 0.28), 1.0, 5.0), 1)
+        trust = round(clamp(satisfaction + rng.gauss(-0.05, 0.25) - (0.25 if escalated else 0), 1.0, 5.0), 1)
+        confidence_building = round(clamp(3.0 + confidence_lift * 0.85 + rng.gauss(0, 0.3), 1.0, 5.0), 1)
+        efficiency = round(clamp(satisfaction + rng.gauss(-0.1, 0.35), 1.0, 5.0), 1)
+        adaptability = round(clamp((helpfulness + trust) / 2 + rng.gauss(0, 0.28), 1.0, 5.0), 1)
 
         recurring_deposit_started = activated and rng.random() < 0.72
         first_investment_started = activated and rng.random() < 0.58
@@ -165,6 +170,11 @@ def generate_users(rng: random.Random, user_count: int) -> pd.DataFrame:
             "confidence_after": confidence_after,
             "confidence_lift": round(confidence_after - confidence_before, 1),
             "inferred_satisfaction": satisfaction,
+            "helpfulness": helpfulness,
+            "trust": trust,
+            "confidence_building": confidence_building,
+            "efficiency": efficiency,
+            "adaptability": adaptability,
             "escalated_to_human": escalated,
             "activated": activated,
             "funnel_stage": pick_funnel_stage(rng, activated, persona),
@@ -193,6 +203,27 @@ def generate_sessions(rng: random.Random, users: pd.DataFrame) -> pd.DataFrame:
             topic = rng.choice(topics)
             accepted_next_step = user.activated and rng.random() < 0.76
             resolved_reference_success = rng.random() < (0.93 if user.financial_literacy == "Intermediate" else 0.86)
+            intent_accuracy = rng.random() < 0.89
+            slot_completion_accuracy = rng.random() < (0.87 if completed else 0.76)
+            context_retention = rng.random() < 0.88
+            dialogue_policy_accuracy = rng.random() < (0.86 if completed else 0.72)
+            retrieval_relevance = rng.random() < 0.90
+            groundedness = rng.random() < 0.94
+            factual_accuracy = rng.random() < 0.96
+            safety_compliance = rng.random() < 0.985
+            integrity_policy_compliance = rng.random() < 0.975
+            perceived_understanding = round(
+                clamp(
+                    2.0
+                    + 0.55 * int(intent_accuracy)
+                    + 0.45 * int(resolved_reference_success)
+                    + 0.45 * int(context_retention)
+                    + rng.gauss(0, 0.35),
+                    1.0,
+                    5.0,
+                ),
+                1,
+            )
 
             rows.append({
                 "session_id": f"session_{session_id:06d}",
@@ -215,6 +246,16 @@ def generate_sessions(rng: random.Random, users: pd.DataFrame) -> pd.DataFrame:
                 "activated_after_session": user.activated and session_index == session_count - 1,
                 "recommended_action_taken": accepted_next_step,
                 "resolved_reference_success": resolved_reference_success,
+                "intent_accuracy": intent_accuracy,
+                "slot_completion_accuracy": slot_completion_accuracy,
+                "context_retention": context_retention,
+                "dialogue_policy_accuracy": dialogue_policy_accuracy,
+                "retrieval_relevance": retrieval_relevance,
+                "groundedness": groundedness,
+                "factual_accuracy": factual_accuracy,
+                "safety_compliance": safety_compliance,
+                "integrity_policy_compliance": integrity_policy_compliance,
+                "perceived_understanding": perceived_understanding,
             })
             session_id += 1
 
@@ -234,6 +275,8 @@ def generate_metric_summary(users: pd.DataFrame, sessions: pd.DataFrame) -> pd.D
         "education_completion_rate": round(users["education_completed"].mean(), 3),
         "accepted_next_step_rate": round(sessions["recommended_action_taken"].mean(), 3),
         "resolved_reference_success_rate": round(sessions["resolved_reference_success"].mean(), 3),
+        "return_usage_rate": round(users["user_id"].isin(sessions["user_id"].value_counts()[lambda counts: counts > 1].index).mean(), 3),
+        "retention_proxy_rate": round(users["recurring_deposit_started"].mean(), 3),
     }])
 
 

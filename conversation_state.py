@@ -20,9 +20,15 @@ DEFAULT_CONTEXT = {
     "last_assistant_question": None,
     "last_dialogue_act": None,
     "exploratory_questions_in_a_row": 0,
+    "pending_information": None,
+    "planning_slots": {},
+    "excluded_topics": [],
 }
 
 TOPIC_RULES = {
+    "travel_spending": {"label": "travel spending", "terms": ["travel", "trip", "vacation"], "parent_topic": "discretionary spending / budgeting", "specificity": 92},
+    "college_costs": {"label": "college costs", "terms": ["college", "tuition"], "parent_topic": "family financial planning", "specificity": 94},
+    "debt_free_retirement": {"label": "debt-free retirement", "terms": ["debt-free retirement", "debt-free in retirement", "debt free in retirement"], "parent_topic": "retirement planning", "specificity": 96},
     "bitcoin": {"label": "Bitcoin", "terms": ["bitcoin", "btc"], "parent_topic": "investing", "specificity": 100},
     "crypto": {"label": "crypto", "terms": ["crypto", "cryptocurrency", "coin", "token"], "parent_topic": "investing", "specificity": 70},
     "stocks": {"label": "stocks", "terms": ["stock", "stocks", "share", "shares", "equity", "equities"], "parent_topic": "investing", "specificity": 80},
@@ -36,6 +42,8 @@ TOPIC_RULES = {
 }
 
 BROAD_TOPIC_RULES = {
+    "discretionary spending / budgeting": ["budget", "budgeting", "spend", "spending", "afford", "travel", "trip", "vacation"],
+    "family financial planning": ["college", "tuition", "family", "child", "children", "son", "daughter"],
     "investing": ["invest", "investing", "investment", "investments"],
     "retirement planning": ["retire", "retirement", "401k", "401(k)", "ira"],
     "financial security": ["safe", "secure", "security", "saving", "savings", "save"],
@@ -45,6 +53,8 @@ BROAD_TOPIC_RULES = {
 PRONOUN_REFERENCES = {"it", "that", "this", "they", "them"}
 ABSTRACT_TOPICS = {"financial security", "general finances", "investing", "retirement planning", "saving"}
 CONCERN_TERMS = {"afraid", "anxious", "behind", "concerned", "nervous", "overwhelmed", "scared", "worried"}
+INVESTING_TERMS = {"invest", "investing", "investment", "investments", "stock", "stocks", "etf", "crypto", "bitcoin"}
+FAMILY_EDUCATION_TERMS = {"child", "children", "college", "daughter", "daughters", "kid", "kids", "son", "sons", "tuition"}
 
 
 def create_conversation_context() -> dict:
@@ -143,11 +153,106 @@ def detect_concern(text: str) -> str | None:
         return "losing money"
     if "enough" in tokens and {"save", "saving", "saved", "retirement"} & tokens:
         return "not saving enough"
-    if any(phrase in lower_text for phrase in ["don't know", "do not know", "don't understand", "do not understand"]):
+    if {"afford", "affordable", "budget", "cost", "costs", "expensive", "pay", "spend", "spending"} & tokens:
+        return "affordability uncertainty"
+    if is_investing_learning_uncertainty(text):
         return "not understanding investing"
     if CONCERN_TERMS & tokens:
         return "general financial uncertainty"
     return None
+
+
+def is_investing_learning_uncertainty(text: str) -> bool:
+    tokens = set(tokenize(text))
+    lower_text = text.lower()
+    learning_gap = any(
+        phrase in lower_text
+        for phrase in ["don't understand", "do not understand", "don't know enough", "do not know enough", "new to investing"]
+    )
+    return learning_gap and bool(tokens & INVESTING_TERMS)
+
+
+def detect_user_correction(text: str) -> dict | None:
+    lower_text = text.lower()
+    correction_patterns = [
+        r"\b(?:i am|i'm) not talking about ([a-z ]+)",
+        r"\b(?:i am|i'm) not asking about ([a-z ]+)",
+        r"\bnot (investing|saving|retirement planning|retirement|college|debt)[.!]?$",
+    ]
+    for pattern in correction_patterns:
+        match = re.search(pattern, lower_text)
+        if match:
+            corrected_topic = match.group(1).strip(" .!?")
+            return {"corrected_away_from": corrected_topic}
+    return None
+
+
+def extract_planning_slots(text: str, context: dict) -> dict:
+    lower_text = text.lower()
+    text_tokens = set(tokenize(text))
+    pending_information = context.get("pending_information")
+    slots = {}
+
+    if pending_information == "retirement timeline":
+        match = re.search(r"\b(\d{1,2})\b", lower_text)
+        if match:
+            slots["retirement_timeline_years"] = int(match.group(1))
+
+    if {"debt", "debts", "owe", "owing"} & text_tokens:
+        if "debt-free" in lower_text or "debt free" in lower_text:
+            slots["debt_goal"] = "be debt-free"
+        elif "both" in text_tokens:
+            slots["debt_goal"] = "avoid new debt and reduce existing debt"
+        elif {"existing", "down", "paying", "owe", "owing"} & text_tokens:
+            slots["debt_goal"] = "reduce existing debt"
+        elif {"avoid", "avoiding", "prevent", "new"} & text_tokens:
+            slots["debt_goal"] = "avoid new debt"
+    if pending_information == "current debt situation":
+        if (
+            {"none", "no", "debt-free"} & text_tokens
+            or "debt free" in lower_text
+            or "do not have" in lower_text
+            or "don't have" in lower_text
+        ):
+            slots["current_debt_status"] = "no current debt"
+        elif {"have", "pay", "paying", "owe", "owing"} & text_tokens:
+            slots["current_debt_status"] = "has debt to work down"
+    if pending_information == "emergency savings status":
+        if {"yes", "have", "some"} & text_tokens:
+            slots["emergency_savings_status"] = "has some emergency savings"
+        elif {"none", "no", "not"} & text_tokens:
+            slots["emergency_savings_status"] = "needs an emergency cushion"
+    if pending_information == "manageable starter savings amount":
+        match = re.search(r"\$?\s*(\d+(?:,\d{3})*)", lower_text)
+        if match:
+            slots["monthly_starter_savings"] = int(match.group(1).replace(",", ""))
+
+    if "comfortable" in text_tokens:
+        slots["desired_outcome"] = "comfortable and financially stable"
+    if FAMILY_EDUCATION_TERMS & text_tokens:
+        slots["family_education_goal"] = "help pay for a child's education"
+    if {"travel", "trip", "vacation"} & text_tokens:
+        slots["life_goal"] = "travel"
+    if pending_information == "education timeline":
+        match = re.search(r"\b(\d{1,2})\b", lower_text)
+        if match:
+            slots["education_timeline_years"] = int(match.group(1))
+    if pending_information == "child age":
+        match = re.search(r"\b(\d{1,2})\b", lower_text)
+        if match:
+            child_age = int(match.group(1))
+            slots["child_age"] = child_age
+            slots["education_timeline_years"] = max(0, 18 - child_age)
+    if pending_information == "current education savings":
+        if {"none", "no", "nothing", "scratch"} & text_tokens or "not yet" in lower_text:
+            slots["education_savings_status"] = "starting from scratch"
+        elif {"yes", "have", "some", "already"} & text_tokens:
+            slots["education_savings_status"] = "has some savings"
+    if pending_information == "manageable education savings amount":
+        match = re.search(r"\$?\s*(\d+(?:,\d{3})*)", lower_text)
+        if match:
+            slots["monthly_education_savings"] = int(match.group(1).replace(",", ""))
+    return slots
 
 
 def topic_specificity(topic: str | None, label: str | None) -> int:
@@ -240,6 +345,12 @@ def classify_intent(text: str, resolved_reference: str | None = None) -> str:
 
     if resolved_reference:
         return "follow_up_question"
+    if {"travel", "trip", "vacation"} & tokens and {"spend", "spending", "afford", "budget"} & tokens:
+        return "budgeting_guidance"
+    if ({"college", "tuition"} & tokens) and {"afford", "pay", "cost", "costs"} & tokens:
+        return "college_affordability_planning"
+    if any(phrase in lower_text for phrase in ["debt-free retirement", "debt-free in retirement", "debt free in retirement"]):
+        return "retirement_goal_planning"
     if "?" in text and any(pattern in lower_text for pattern in educational_patterns):
         return "educational_query"
     if detect_concern(text):
@@ -256,8 +367,8 @@ def classify_intent(text: str, resolved_reference: str | None = None) -> str:
 def infer_user_model(text: str, topic: dict | None) -> dict:
     tokens = set(tokenize(text))
     lower_text = text.lower()
-    confusion = bool({"confused", "beginner", "new", "learn", "understand", "know", "explain"} & tokens)
-    negated_knowledge = any(phrase in lower_text for phrase in ["don't know", "do not know", "don't understand", "do not understand"])
+    negated_knowledge = is_investing_learning_uncertainty(text)
+    confusion = negated_knowledge or bool({"confused", "beginner", "learn", "explain"} & tokens and tokens & INVESTING_TERMS)
     fear_loss = bool({"lose", "losing", "lost", "loss", "afraid", "scared", "worried", "risk"} & tokens)
     starting_late = bool({"late", "behind", "old", "catch"} & tokens) or "too late" in lower_text
     not_saving_enough = "enough" in tokens and bool({"save", "saving", "saved", "retirement"} & tokens)
@@ -267,7 +378,13 @@ def infer_user_model(text: str, topic: dict | None) -> dict:
         current_goal = f"learn about {topic['label']}"
     if {"retire", "retirement"} & tokens:
         current_goal = "retirement security"
-    elif {"family", "kids", "children", "college"} & tokens:
+    if any(phrase in lower_text for phrase in ["debt-free retirement", "debt-free in retirement", "debt free in retirement"]):
+        current_goal = "retire debt-free"
+    elif {"travel", "trip", "vacation"} & tokens:
+        current_goal = "make room for travel without undermining financial security"
+    elif FAMILY_EDUCATION_TERMS & tokens:
+        current_goal = "help pay for a child's education"
+    elif {"family", "kids", "children"} & tokens:
         current_goal = "family financial stability"
     elif {"emergency", "emergencies", "buffer", "cushion"} & tokens:
         current_goal = "emergency savings"
@@ -285,6 +402,8 @@ def infer_user_model(text: str, topic: dict | None) -> dict:
         current_fear = "not saving enough"
     elif {"debt", "debts", "owe", "owing"} & tokens:
         current_fear = "falling into debt"
+    elif {"afford", "affordable", "budget", "cost", "costs", "expensive", "pay", "spend", "spending"} & tokens:
+        current_fear = "affordability uncertainty"
     elif negated_knowledge:
         current_fear = "not understanding investing"
 
@@ -319,9 +438,14 @@ def analyze_message(user_message: str, conversation_context: dict) -> dict:
     resolved_reference = resolve_reference(user_message, conversation_context)
     analyzed_text = enrich_with_resolved_reference(user_message, resolved_reference)
     topic = detect_topic(analyzed_text)
+    correction = detect_user_correction(user_message)
+    if correction and topic and correction["corrected_away_from"] in [topic["topic"], topic["label"].lower()]:
+        topic = None
     user_model = infer_user_model(user_message, topic)
     intent = classify_intent(user_message, resolved_reference)
     concern = detect_concern(user_message)
+    extracted_slots = extract_planning_slots(user_message, conversation_context)
+    planning_slots = {**conversation_context.get("planning_slots", {}), **extracted_slots}
 
     if user_model["current_goal"] == "general financial progress":
         prior_goal = conversation_context.get("current_goal")
@@ -359,6 +483,9 @@ def analyze_message(user_message: str, conversation_context: dict) -> dict:
         "asked_question": "?" in user_message,
         "expressed_concern": concern is not None,
         "concern_type": concern,
+        "user_correction": correction,
+        "extracted_slots": extracted_slots,
+        "planning_slots": planning_slots,
         **user_model,
     }
 
@@ -377,6 +504,11 @@ def update_conversation_context(context: dict, user_message: str, understanding:
     context["risk_level"] = understanding["risk_level"]
     context["unresolved_question"] = user_message if "?" in user_message else None
     context["last_analyzed_text"] = user_message
+    context["planning_slots"] = understanding.get("planning_slots", context.get("planning_slots", {}))
+    correction = understanding.get("user_correction")
+    if correction:
+        excluded_topic = correction["corrected_away_from"]
+        context["excluded_topics"] = list(dict.fromkeys([*context.get("excluded_topics", []), excluded_topic]))
 
     topic = detect_topic(user_message)
     if topic and topic["label"] not in ABSTRACT_TOPICS:

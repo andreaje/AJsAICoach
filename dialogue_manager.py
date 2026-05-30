@@ -40,19 +40,42 @@ def choose_follow_up(understanding: dict, user_model: dict) -> tuple[str | None,
     topic = understanding.get("primary_topic")
     concern = understanding.get("concern_type")
     goal = user_model.get("current_goal")
+    slots = understanding.get("planning_slots", {})
 
-    if concern == "starting too late":
+    if understanding.get("intent") == "budgeting_guidance":
+        return "travel budget context", "What would help most: estimating a safe monthly travel budget, planning for one specific trip, or balancing travel against other goals?"
+    if understanding.get("intent") == "retirement_goal_planning":
+        return "retirement debt context", "Do you currently have debt you want to pay down before retirement, or are you trying to avoid carrying new debt into retirement?"
+    if "family_education_goal" in slots and "education_timeline_years" not in slots:
+        return "education timeline", "About how many years are there before your child may start college?"
+    if "education_timeline_years" in slots and "education_savings_status" not in slots:
+        return "current education savings", "Have you already set aside anything for that goal, or would you be starting from scratch?"
+    if "education_savings_status" in slots and "monthly_education_savings" not in slots:
+        return "manageable education savings amount", "What monthly amount would feel realistic without crowding out your other priorities?"
+    if "monthly_education_savings" in slots:
+        return "education next-step confirmation", "Would you like to use that as a starting point and revisit it as the college timeline gets closer?"
+    if concern == "starting too late" and "retirement_timeline_years" not in slots:
         return "retirement timeline", "Roughly how many years do you have until you would like to retire?"
-    if concern == "falling into debt":
+    if concern == "falling into debt" and "debt_goal" not in slots:
         return "whether the user wants to prevent or reduce debt", "Is your main concern avoiding new debt, paying down debt you already have, or both?"
+    if concern == "falling into debt" and "current_debt_status" not in slots:
+        return "current debt situation", "Do you currently have debt you want to work down, or is the priority staying debt-free?"
+    if slots.get("current_debt_status") == "no current debt" and "emergency_savings_status" not in slots:
+        return "emergency savings status", "Do you already have some savings set aside for unexpected expenses?"
+    if slots.get("emergency_savings_status") == "needs an emergency cushion" and "monthly_starter_savings" not in slots:
+        return "manageable starter savings amount", "What amount could you comfortably set aside each month to start that cushion?"
+    if "monthly_starter_savings" in slots:
+        return "next-step confirmation", "Would you like to make that your first step and revisit retirement contributions after the cushion is underway?"
     if concern == "general financial uncertainty" and (
         understanding.get("parent_topic") == "retirement planning"
         or topic == "retirement planning"
         or goal == "retirement security"
     ):
         return "preferred retirement starting point", "Would it be easier to start with your timeline or with a manageable monthly saving target?"
-    if goal == "comfortable retirement":
+    if goal == "comfortable retirement" and "desired_outcome" not in slots:
         return "meaning of a comfortable retirement", "When you picture comfortable, is the priority covering everyday expenses, having room for extras, or both?"
+    if "retirement_timeline_years" in slots and goal == "retirement security":
+        return "meaning of a comfortable retirement", "When you picture a comfortable retirement, what matters most: covering essentials, having room for extras, or both?"
     if goal == "financial comfort and stability":
         return "first priority for financial stability", "Would it help to start with monthly breathing room, an emergency cushion, or a plan for existing debt?"
     if topic in FOLLOW_UPS:
@@ -76,8 +99,29 @@ def decide_dialogue_plan(
     intent = understanding.get("intent")
     exploratory_streak = int(context.get("exploratory_questions_in_a_row", 0))
     repeated_user_message = normalize_message(latest_user_message) == normalize_message(context.get("last_analyzed_text"))
+    captured_information = bool(understanding.get("extracted_slots"))
 
-    if needs_reference_clarification(understanding, latest_user_message):
+    if intent == "budgeting_guidance":
+        dialogue_act = "answer_and_gather_budget_context"
+        response_goal = "Frame the life goal as a budgeting question and gather the most useful spending context."
+        must_address = ["travel goal", "affordability"]
+        next_information_needed, follow_up_question = choose_follow_up(understanding, user_model)
+    elif intent == "retirement_goal_planning":
+        dialogue_act = "reflect_goal_and_gather_debt_context"
+        response_goal = "Reflect the debt-free retirement goal and gather debt context."
+        must_address = ["retirement goal", "debt context"]
+        next_information_needed, follow_up_question = choose_follow_up(understanding, user_model)
+    elif intent == "college_affordability_planning":
+        dialogue_act = "answer_and_gather_college_context"
+        response_goal = "Address college affordability and gather the timeline needed for planning."
+        must_address = ["college affordability", "education timeline"]
+        next_information_needed, follow_up_question = choose_follow_up(understanding, user_model)
+    elif understanding.get("user_correction"):
+        dialogue_act = "summarize"
+        response_goal = "Acknowledge the correction, drop the mistaken frame, and return to the user's actual goal."
+        must_address = ["user correction", "actual goal"]
+        next_information_needed, follow_up_question = choose_follow_up(understanding, user_model)
+    elif needs_reference_clarification(understanding, latest_user_message):
         dialogue_act = "clarify_reference"
         response_goal = "Clarify the user's reference before giving guidance."
         must_address = ["ambiguous reference"]
@@ -94,6 +138,11 @@ def decide_dialogue_plan(
         dialogue_act = "reassure"
         response_goal = "Acknowledge the concern and reduce uncertainty with a concrete, supportive perspective."
         must_address = ["expressed concern"]
+        next_information_needed, follow_up_question = choose_follow_up(understanding, user_model)
+    elif captured_information:
+        dialogue_act = "gather_information"
+        response_goal = "Use the information the user just provided and gather the next missing planning detail."
+        must_address = ["newly provided information"]
         next_information_needed, follow_up_question = choose_follow_up(understanding, user_model)
     elif intent in ["educational_query", "learn_before_investing", "product_exploration"]:
         dialogue_act = "educate"
@@ -124,10 +173,14 @@ def decide_dialogue_plan(
 
     previous_question = normalize_question(context.get("last_assistant_question"))
     if normalize_question(follow_up_question) == previous_question:
-        follow_up_question = "Would it help to focus on one practical next step together?"
+        if next_information_needed == "education timeline":
+            next_information_needed = "child age"
+            follow_up_question = "How old is your child now?"
+        else:
+            follow_up_question = "Would it help to focus on one practical next step together?"
     if normalize_question(follow_up_question) == previous_question:
         follow_up_question = None
-    if dialogue_act in EXPLORATORY_ACTS and exploratory_streak >= 2:
+    if dialogue_act in EXPLORATORY_ACTS and exploratory_streak >= 2 and not captured_information:
         dialogue_act = "summarize"
         response_goal = "Summarize what is known and provide guidance before asking for more information."
         must_address = ["conversation progress", "useful guidance"]
@@ -140,6 +193,7 @@ def decide_dialogue_plan(
         "next_information_needed": next_information_needed,
         "follow_up_question": follow_up_question,
         "avoid_repetition": repeated_user_message,
+        "captured_information": understanding.get("extracted_slots", {}),
     }
 
 
@@ -149,4 +203,5 @@ def record_dialogue_plan(context: dict, dialogue_plan: dict) -> dict:
     else:
         context["exploratory_questions_in_a_row"] = 0
     context["last_dialogue_act"] = dialogue_plan["dialogue_act"]
+    context["pending_information"] = dialogue_plan.get("next_information_needed") if dialogue_plan.get("follow_up_question") else None
     return context

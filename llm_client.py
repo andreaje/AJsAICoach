@@ -8,7 +8,6 @@ REFLECTIONS = {
     "decision_support": "You are weighing a financial decision and want to understand the tradeoffs before acting.",
     "product_exploration": "You are exploring a financial product and want a clearer sense of how it fits into the bigger picture.",
     "learn_before_investing": "You are interested in investing, but you want to understand the product before putting money into it.",
-    "goal_discovery": "You are starting with the goal, which is a useful place to begin.",
 }
 
 
@@ -48,6 +47,17 @@ def address_question_or_concern(user_message: str, understanding: dict) -> str:
         return (
             "It is understandable to worry about whether you are saving enough. You do not need a perfect number "
             "before you begin; a realistic contribution and a plan to revisit it can create momentum."
+        )
+    if concern == "affordability uncertainty":
+        if understanding.get("current_goal") == "help pay for a child's education":
+            return (
+                "Paying for college can feel like a large, uncertain target. You do not need to solve the full cost "
+                "today; the useful first step is to understand the time available and what contribution could fit "
+                "alongside your other priorities."
+            )
+        return (
+            "It makes sense to pause on affordability before choosing a next step. A useful starting point is to "
+            "separate the total cost from what would fit realistically into your monthly budget."
         )
     if concern == "falling into debt":
         return (
@@ -99,6 +109,55 @@ def plan_guidance(dialogue_plan: dict, understanding: dict) -> str:
     )
 
 
+def captured_information_response(dialogue_plan: dict) -> str:
+    slots = dialogue_plan.get("captured_information", {})
+    if "retirement_timeline_years" in slots:
+        years = slots["retirement_timeline_years"]
+        return (
+            f"About {years} years gives us a useful planning horizon. That does not answer every retirement question "
+            "at once, but it is enough to move from worry toward a realistic plan."
+        )
+    if "education_timeline_years" in slots:
+        years = slots["education_timeline_years"]
+        return (
+            f"About {years} years gives you a planning horizon for the college goal. The next useful step is to see "
+            "what is already set aside and what a manageable contribution could look like."
+        )
+    if slots.get("education_savings_status") == "starting from scratch":
+        return (
+            "Starting from scratch is okay. The helpful move is to choose a contribution that fits your budget now, "
+            "then revisit it as your circumstances and the college timeline change."
+        )
+    if slots.get("education_savings_status") == "has some savings":
+        return (
+            "Having something set aside already gives you a base to build from. The next step is choosing a monthly "
+            "amount that supports the goal without squeezing your other priorities."
+        )
+    if "monthly_education_savings" in slots:
+        amount = slots["monthly_education_savings"]
+        return (
+            f"${amount:,} per month gives you a concrete starting point for the college goal. You can treat it as a "
+            "working amount and revisit it over time rather than trying to solve the full cost today."
+        )
+    if slots.get("current_debt_status") == "no current debt":
+        return (
+            "Being debt-free today is a strong starting point. The next useful check is whether an unexpected expense "
+            "could push you into debt, because a small emergency cushion can protect that progress."
+        )
+    if slots.get("emergency_savings_status") == "needs an emergency cushion":
+        return (
+            "Then a starter emergency cushion is a sensible first move. It does not need to be fully funded at once; "
+            "the useful next step is choosing an amount you can set aside consistently without creating new strain."
+        )
+    if "monthly_starter_savings" in slots:
+        amount = slots["monthly_starter_savings"]
+        return (
+            f"${amount:,} per month is a concrete starting point. Consistency matters more than making the first "
+            "contribution perfect, and you can revisit the amount as your cushion grows."
+        )
+    return ""
+
+
 def repeated_turn_guidance(understanding: dict) -> str:
     if understanding.get("concern_type") == "falling into debt":
         return (
@@ -112,15 +171,72 @@ def repeated_turn_guidance(understanding: dict) -> str:
     )
 
 
-def generate_response(
+def correction_response(understanding: dict) -> str:
+    correction = understanding["user_correction"]
+    corrected_away_from = correction["corrected_away_from"]
+    goal = understanding.get("current_goal")
+    if goal and goal not in ["Not yet detected", "general financial progress"]:
+        return (
+            f"You are right. I pulled this toward {corrected_away_from}, but the goal you named is to {goal}. "
+            "Let us stay with that."
+        )
+    return f"You are right. I pulled this toward {corrected_away_from}. Let us stay with the concern you actually raised."
+
+
+def structured_goal_fallback(
+    understanding: dict,
+    dialogue_plan: dict,
+    retrieved_knowledge: dict,
+    guardrail_result: dict,
+) -> str:
+    intent = understanding.get("intent")
+    goal = understanding.get("current_goal")
+    topic = understanding.get("topic_label") or understanding.get("primary_topic")
+    parts = []
+
+    if guardrail_result["mode"] == "educational_only":
+        parts.append(guardrail_message(guardrail_result))
+
+    if intent == "budgeting_guidance":
+        parts.append(
+            "It sounds like travel is important to you, but you want to understand what you can spend without putting "
+            "your broader financial security at risk. A useful way to think about this is to separate essentials, "
+            "savings or debt goals, and flexible spending."
+        )
+    elif intent == "retirement_goal_planning":
+        parts.append(
+            "Being debt-free in retirement is a clear planning goal. A useful first step is to understand any debt "
+            "you have now, your retirement timeline, and the monthly room available to reduce balances without "
+            "crowding out other essentials."
+        )
+    elif intent == "college_affordability_planning":
+        parts.append(
+            "College costs can feel like a large target, but you do not need to solve the full amount today. A useful "
+            "starting point is the time available, what is already set aside, and a contribution that can fit "
+            "alongside your other priorities."
+        )
+    else:
+        readable_goal = goal if goal not in [None, "Not yet detected", "general financial progress"] else topic
+        parts.append(
+            f"It sounds like {readable_goal} is the priority. A useful next step is to make the goal concrete enough "
+            "to compare it with your essentials and other commitments."
+        )
+
+    if retrieved_knowledge:
+        parts.append(retrieved_knowledge["content"])
+    parts.append(dialogue_plan.get("follow_up_question"))
+    return "\n\n".join(part for part in parts if part)
+
+
+def _generate_template_response(
     user_message: str,
     understanding: dict,
     retrieved_knowledge: dict,
     tool_results: dict,
     conversation_context: dict,
     dialogue_plan: dict,
+    guardrail_result: dict,
 ) -> str:
-    guardrail_result = evaluate_guardrails(user_message)
     parts = []
 
     if dialogue_plan.get("dialogue_act") == "clarify_reference":
@@ -128,6 +244,11 @@ def generate_response(
             "I want to make sure I understand what you mean before answering.",
             dialogue_plan["follow_up_question"],
         ])
+    if understanding.get("user_correction"):
+        return "\n\n".join(part for part in [
+            correction_response(understanding),
+            dialogue_plan.get("follow_up_question"),
+        ] if part)
     if dialogue_plan.get("avoid_repetition"):
         return "\n\n".join(part for part in [
             repeated_turn_guidance(understanding),
@@ -139,20 +260,24 @@ def generate_response(
 
     if understanding["intent"] == "follow_up_question" and understanding["resolved_reference"] != "None":
         parts.append(f"You are asking about {understanding['resolved_reference']}.")
-    elif understanding["intent"] != "educational_query":
+    elif understanding["intent"] not in ["educational_query", "emotional_concern"]:
         reflection = REFLECTIONS.get(understanding["intent"])
         if reflection:
             parts.append(reflection)
 
+    slot_response = captured_information_response(dialogue_plan)
+    if slot_response:
+        parts.append(slot_response)
+
     concern_response = address_question_or_concern(user_message, understanding)
-    if concern_response and (
+    if concern_response and not slot_response and (
         understanding.get("expressed_concern")
         or not retrieved_knowledge
         or "safe" in re.findall(r"[a-z0-9']+", user_message.lower())
     ):
         parts.append(concern_response)
 
-    if retrieved_knowledge:
+    if retrieved_knowledge and not (understanding["intent"] == "follow_up_question" and concern_response):
         parts.append(retrieved_knowledge["content"])
 
     tool_text = format_tool_results(tool_results)
@@ -160,8 +285,63 @@ def generate_response(
         parts.append(tool_text)
 
     if understanding["intent"] == "decision_support" and not retrieved_knowledge:
-        parts.append("A useful next step is to compare risk, timeline, access to your money, and whether your emergency savings are protected.")
+        parts.append("A useful next step is to compare the choice with your goal, budget, timeline, and other commitments.")
 
     parts.append(plan_guidance(dialogue_plan, understanding))
     parts.append(dialogue_plan.get("follow_up_question"))
     return "\n\n".join(part for part in parts if part)
+
+
+def generate_response_details(
+    user_message: str,
+    understanding: dict,
+    retrieved_knowledge: dict,
+    tool_results: dict,
+    conversation_context: dict,
+    dialogue_plan: dict,
+    guardrail_result: dict | None = None,
+) -> dict:
+    guardrail_result = guardrail_result or evaluate_guardrails(user_message)
+    structured_intents = {"budgeting_guidance", "retirement_goal_planning", "college_affordability_planning"}
+    use_structured_fallback = understanding.get("intent") in structured_intents
+
+    if use_structured_fallback:
+        text = structured_goal_fallback(understanding, dialogue_plan, retrieved_knowledge, guardrail_result)
+        response_source = "structured_fallback"
+    else:
+        text = _generate_template_response(
+            user_message,
+            understanding,
+            retrieved_knowledge,
+            tool_results,
+            conversation_context,
+            dialogue_plan,
+            guardrail_result,
+        )
+        response_source = "template"
+
+    return {
+        "text": text,
+        "response_source": response_source,
+        "retrieved_knowledge_used": retrieved_knowledge.get("topic") if retrieved_knowledge else None,
+    }
+
+
+def generate_response(
+    user_message: str,
+    understanding: dict,
+    retrieved_knowledge: dict,
+    tool_results: dict,
+    conversation_context: dict,
+    dialogue_plan: dict,
+    guardrail_result: dict | None = None,
+) -> str:
+    return generate_response_details(
+        user_message,
+        understanding,
+        retrieved_knowledge,
+        tool_results,
+        conversation_context,
+        dialogue_plan,
+        guardrail_result,
+    )["text"]
