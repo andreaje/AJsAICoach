@@ -12,24 +12,29 @@ from conversation_state import (
 )
 from dialogue_manager import decide_dialogue_plan, record_dialogue_plan
 from guardrails import evaluate_guardrails
+from i18n import localize_coach_response, t
 from knowledge_base import retrieve_knowledge
 from llm_client import generate_response_details
 import mock_data as mock_data_module
 from tools import collect_tool_results
 
-st.set_page_config(page_title="Acorns AI Coach", layout="wide")
+st.set_page_config(page_title="AJ's AI Coach", layout="wide")
 
-st.title("🌱 Acorns AI Coach")
-st.caption("Helping everyday people build financial confidence.")
+st.title("🌴 AJ's AI Coach")
+if "language" not in st.session_state:
+    st.session_state.language = "en"
 
-ASSISTANT_AVATAR = "🐿️"
+lang = st.session_state.language
+st.caption(t("app_caption", lang))
+
+ASSISTANT_AVATAR = "✨"
 MOCK_DATA_SCHEMA_VERSION = 6
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {
             "role": "assistant",
-            "content": "When you think about your financial future, what are you hoping for most?",
+            "content": t("opening_message", lang),
         }
     ]
 
@@ -68,6 +73,11 @@ def load_mock_data(schema_version: int):
 def reset_conversation():
     st.session_state.clear()
     st.rerun()
+
+
+def update_opening_message():
+    if len(st.session_state.get("messages", [])) == 1 and st.session_state.messages[0]["role"] == "assistant":
+        st.session_state.messages[0]["content"] = t("opening_message", st.session_state.language)
 
 
 def multi_filter(label: str, values: pd.Series, key: str) -> list[str]:
@@ -180,14 +190,15 @@ def horizontal_bar_chart(data: pd.DataFrame, category: str, values: list[str]):
 
 
 def filter_mock_data(users: pd.DataFrame, sessions: pd.DataFrame, key_prefix: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    with st.popover("Filters"):
-        st.caption("Select one or more values in each dropdown.")
-        personas = multi_filter("Persona", users["persona"], f"{key_prefix}_persona")
-        user_types = multi_filter("User type", users["user_type"], f"{key_prefix}_user_type")
-        literacy_levels = multi_filter("Financial literacy", users["financial_literacy"], f"{key_prefix}_literacy")
-        coaching_styles = multi_filter("Coaching style", users["coaching_style"], f"{key_prefix}_coaching_style")
-        risk_levels = multi_filter("Risk level", users["risk_level"], f"{key_prefix}_risk_level")
-        topic_categories = multi_filter("Topic category", sessions["topic_category"], f"{key_prefix}_topic_category")
+    lang = st.session_state.language
+    with st.popover(t("filters", lang)):
+        st.caption(t("filter_help", lang))
+        personas = multi_filter(t("persona", lang), users["persona"], f"{key_prefix}_persona")
+        user_types = multi_filter(t("user_type", lang), users["user_type"], f"{key_prefix}_user_type")
+        literacy_levels = multi_filter(t("financial_literacy", lang), users["financial_literacy"], f"{key_prefix}_literacy")
+        coaching_styles = multi_filter(t("coaching_style", lang), users["coaching_style"], f"{key_prefix}_coaching_style")
+        risk_levels = multi_filter(t("risk_level", lang), users["risk_level"], f"{key_prefix}_risk_level")
+        topic_categories = multi_filter(t("topic_category", lang), sessions["topic_category"], f"{key_prefix}_topic_category")
 
     filtered_users = users[
         users["persona"].isin(personas)
@@ -262,18 +273,19 @@ def retention_trend(users: pd.DataFrame, sessions: pd.DataFrame) -> pd.DataFrame
 
 
 def render_business_metrics():
+    lang = st.session_state.language
     users, sessions = load_analytics_data()
     if users is None:
         return
     users, sessions = filter_mock_data(users, sessions, "business")
     if users.empty or sessions.empty:
-        st.warning("No mocked sessions match these filters.")
+        st.warning(t("no_matching_sessions", lang))
         return
 
-    st.markdown("**Business Metrics answer:** \"Is the product creating value?\"")
-    st.caption(f"{len(users):,} synthetic users and {len(sessions):,} coaching sessions in the filtered view.")
+    st.markdown(f"**{t('business_metrics_answer', lang)}**")
+    st.caption(t("filtered_view", lang).format(users=len(users), sessions=len(sessions)))
 
-    st.header("Acquisition & Engagement")
+    st.header(t("acquisition_engagement", lang))
     trend = active_user_trend(sessions)
     latest = trend.iloc[-1]
     engagement = st.columns(5)
@@ -281,21 +293,21 @@ def render_business_metrics():
     engagement[1].metric("WAU", f"{latest['WAU']:,.0f}")
     engagement[2].metric("MAU", f"{latest['MAU']:,.0f}")
     engagement[3].metric("DAU / MAU", f"{latest['DAU'] / max(1, latest['MAU']):.1%}")
-    engagement[4].metric("Average Sessions / User", f"{len(sessions) / len(users):.2f}")
-    st.subheader("DAU / WAU / MAU Trend")
+    engagement[4].metric(t("average_sessions_user", lang), f"{len(sessions) / len(users):.2f}")
+    st.subheader(t("active_user_trend", lang))
     st.line_chart(trend)
 
-    st.header("Funnel")
+    st.header(t("funnel", lang))
     old_stage_rank = {"started_chat": 0, "shared_goal": 1, "received_guidance": 2, "viewed_recommendation": 3, "activated": 4}
     user_stage_rank = users["funnel_stage"].map(old_stage_rank)
     completed_onboarding = sessions.loc[sessions["completed_session"], "user_id"].nunique()
     raw_counts = [
-        ("Started conversation", len(users)),
-        ("Completed onboarding", completed_onboarding),
-        ("Goal identified", user_stage_rank.ge(1).sum()),
-        ("Recommendation delivered", user_stage_rank.ge(2).sum()),
-        ("Next step accepted", sessions.loc[sessions["recommended_action_taken"], "user_id"].nunique()),
-        ("Returned user", sessions["user_id"].value_counts().gt(1).sum()),
+        (t("started_conversation", lang), len(users)),
+        (t("completed_onboarding", lang), completed_onboarding),
+        (t("goal_identified", lang), user_stage_rank.ge(1).sum()),
+        (t("recommendation_delivered", lang), user_stage_rank.ge(2).sum()),
+        (t("next_step_accepted", lang), sessions.loc[sessions["recommended_action_taken"], "user_id"].nunique()),
+        (t("returned_user", lang), sessions["user_id"].value_counts().gt(1).sum()),
     ]
     funnel_counts = []
     previous_count = len(users)
@@ -304,81 +316,71 @@ def render_business_metrics():
         funnel_counts.append((label, previous_count))
     render_funnel(funnel_counts)
 
-    st.header("Business Outcomes")
+    st.header(t("business_outcomes", lang))
     returning_users = sessions["user_id"].value_counts().gt(1).sum() / len(users)
     outcomes = st.columns(5)
-    outcomes[0].metric("Activation Rate", f"{users['activated'].mean():.1%}")
-    outcomes[1].metric("Accepted Next-Step Rate", f"{sessions['recommended_action_taken'].mean():.1%}")
-    outcomes[2].metric("Return Usage Rate", f"{returning_users:.1%}")
-    outcomes[3].metric("Retention Proxy", f"{users['recurring_deposit_started'].mean():.1%}")
-    outcomes[4].metric("Escalation Rate", f"{sessions['escalated_to_human'].mean():.1%}")
+    outcomes[0].metric(t("activation_rate", lang), f"{users['activated'].mean():.1%}")
+    outcomes[1].metric(t("accepted_next_step_rate", lang), f"{sessions['recommended_action_taken'].mean():.1%}")
+    outcomes[2].metric(t("return_usage_rate", lang), f"{returning_users:.1%}")
+    outcomes[3].metric(t("retention_proxy", lang), f"{users['recurring_deposit_started'].mean():.1%}")
+    outcomes[4].metric(t("escalation_rate", lang), f"{sessions['escalated_to_human'].mean():.1%}")
 
     left, right = st.columns(2)
     with left:
-        st.subheader("Persona Breakdown")
+        st.subheader(t("persona_breakdown", lang))
         horizontal_bar_chart(users["persona"].value_counts().rename_axis("persona").to_frame("users"), "persona", ["users"])
     with right:
-        st.subheader("Retention Trend")
+        st.subheader(t("retention_trend", lang))
         st.line_chart(retention_trend(users, sessions))
 
 
 def render_system_metrics():
+    lang = st.session_state.language
     users, sessions = load_analytics_data()
     if users is None:
         return
     users, sessions = filter_mock_data(users, sessions, "system")
     if users.empty or sessions.empty:
-        st.warning("No mocked sessions match these filters.")
+        st.warning(t("no_matching_sessions", lang))
         return
 
-    st.markdown("**System Metrics answer:** \"Is the AI system behaving correctly and why?\"")
-    st.caption(f"{len(users):,} synthetic users and {len(sessions):,} coaching sessions in the filtered view.")
+    st.markdown(f"**{t('system_metrics_answer', lang)}**")
+    st.caption(t("filtered_view", lang).format(users=len(users), sessions=len(sessions)))
 
-    st.header("Critical Quality Metrics")
-    st.caption("Non-negotiable gating metrics. These must remain healthy before optimizing other outcomes.")
+    st.header(t("critical_quality_metrics", lang))
+    st.caption(t("quality_gate_caption", lang))
     quality = st.columns(3)
-    quality[0].metric("Accuracy", f"{sessions['factual_accuracy'].mean():.1%}")
-    quality[1].metric("Safety", f"{sessions['safety_compliance'].mean():.1%}")
-    quality[2].metric("Integrity / Policy Compliance", f"{sessions['integrity_policy_compliance'].mean():.1%}")
-    st.markdown(
-        "**Accuracy:** Is the information factually correct?  \n"
-        "**Safety:** Does the response avoid causing harm?  \n"
-        "**Integrity:** Does the response stay within intended behavioral and regulatory boundaries?"
-    )
-    st.caption("Examples include harmful financial advice, failure to escalate, insider trading guidance, and unauthorized personalized investment recommendations.")
+    quality[0].metric(t("accuracy", lang), f"{sessions['factual_accuracy'].mean():.1%}")
+    quality[1].metric(t("safety", lang), f"{sessions['safety_compliance'].mean():.1%}")
+    quality[2].metric(t("integrity", lang), f"{sessions['integrity_policy_compliance'].mean():.1%}")
+    st.markdown(t("quality_definitions", lang))
+    st.caption(t("quality_examples", lang))
 
-    st.header("User Experience Metrics")
-    st.caption("Primary user outcomes: whether the coaching experience creates value with reasonable effort.")
+    st.header(t("user_experience_metrics", lang))
+    st.caption(t("ux_caption", lang))
     ux_metrics = {
-        "Helpfulness": users["helpfulness"].mean(),
-        "Trust": users["trust"].mean(),
-        "Confidence Building": users["confidence_building"].mean(),
-        "Adaptability": users["adaptability"].mean(),
-        "Efficiency": users["efficiency"].mean(),
-        "Satisfaction": users["inferred_satisfaction"].mean(),
+        t("helpfulness", lang): users["helpfulness"].mean(),
+        t("trust", lang): users["trust"].mean(),
+        t("confidence_building", lang): users["confidence_building"].mean(),
+        t("adaptability", lang): users["adaptability"].mean(),
+        t("efficiency", lang): users["efficiency"].mean(),
+        t("satisfaction", lang): users["inferred_satisfaction"].mean(),
     }
     scorecards = st.columns(6)
     for column, (label, value) in zip(scorecards, ux_metrics.items()):
         column.metric(label, f"{value:.2f} / 5")
-    st.markdown(
-        "**Helpfulness:** Did the response help the user move toward their goal?  \n"
-        "**Trust:** Would the user reasonably rely on the coach?  \n"
-        "**Confidence Building:** Did the interaction increase confidence?  \n"
-        "**Adaptability:** Did the coach appropriately adjust to the user?  \n"
-        "**Efficiency:** Did the user achieve value with reasonable effort?  \n"
-        "**Satisfaction:** Overall user sentiment."
-    )
+    st.markdown(t("ux_definitions", lang))
     ux_daily = sessions[["session_date", "user_id"]].merge(
         users[["user_id", "helpfulness", "trust", "confidence_building", "adaptability", "efficiency", "inferred_satisfaction"]],
         on="user_id",
     )
     ux_daily["session_date"] = pd.to_datetime(ux_daily["session_date"])
     ux_trend = ux_daily.groupby("session_date")[["helpfulness", "trust", "confidence_building", "adaptability", "efficiency", "inferred_satisfaction"]].mean()
-    st.subheader("UX Metric Trend")
+    st.subheader(t("ux_metric_trend", lang))
     st.line_chart(ux_trend)
 
-    st.header("Diagnostic Metrics")
-    st.caption("Explanatory metrics that show why quality and UX outcomes are moving.")
+    st.header(t("diagnostic_metrics", lang))
+    st.caption(t("diagnostic_caption", lang))
     diagnostic_chart = pd.DataFrame([
         {"metric": "Intent Accuracy", "module": "Conversation Understanding", "score_pct": sessions["intent_accuracy"].mean() * 100},
         {"metric": "Reference Resolution Accuracy", "module": "Conversation Understanding", "score_pct": sessions["resolved_reference_success"].mean() * 100},
@@ -403,49 +405,61 @@ def render_system_metrics():
         },
     }
     st.vega_lite_chart(diagnostic_chart, diagnostic_spec, width="stretch")
-    st.info(
-        "High Perceived Understanding + Low Helpfulness may indicate a Dialogue Manager failure. "
-        "The system understood the user but selected the wrong conversational action."
-    )
+    st.info(t("diagnostic_insight", lang))
 
 
 def render_sidebar():
+    lang = st.session_state.language
+    language_options = {"English": "en", "German": "de", "Spanish": "es"}
+    selected_label = next(label for label, code in language_options.items() if code == lang)
+    selected_language = st.selectbox(
+        t("language", lang),
+        list(language_options),
+        index=list(language_options).index(selected_label),
+    )
+    if language_options[selected_language] != lang:
+        st.session_state.language = language_options[selected_language]
+        update_opening_message()
+        st.rerun()
+    st.caption(t("prototype_note", lang))
+
     context = st.session_state.conversation_context
-    st.header("Customer Understanding")
+    st.header(t("customer_understanding", lang))
     sidebar_fields = {
-        "Primary Topic": context["primary_topic"] or "None",
-        "Parent Topic": context["parent_topic"] or "None",
-        "Resolved Reference": context["resolved_reference"],
-        "Current Goal": context["current_goal"],
-        "Current Fear": context["current_fear"],
-        "Persona": context["persona"],
-        "Confidence": context["confidence_level"],
-        "Coaching Style": context["coaching_style"],
-        "Risk Level": context["risk_level"],
+        t("primary_topic", lang): context["primary_topic"] or "None",
+        t("parent_topic", lang): context["parent_topic"] or "None",
+        t("resolved_reference", lang): context["resolved_reference"],
+        t("current_goal", lang): context["current_goal"],
+        t("current_fear", lang): context["current_fear"],
+        t("persona", lang): context["persona"],
+        t("confidence", lang): context["confidence_level"],
+        t("coaching_style", lang): context["coaching_style"],
+        t("risk_level", lang): context["risk_level"],
     }
     for label, value in sidebar_fields.items():
         st.markdown(f"**{label}:** {value}")
-    if st.button("Reset conversation"):
+    if st.button(t("reset_conversation", lang)):
         reset_conversation()
 
 
 def render_understanding_tab():
-    st.subheader("Conversation Context")
+    lang = st.session_state.language
+    st.subheader(t("conversation_context", lang))
     st.json(st.session_state.conversation_context)
 
-    st.subheader("Current Message Understanding")
+    st.subheader(t("current_message_understanding", lang))
     if st.session_state.last_understanding:
         st.json(st.session_state.last_understanding)
     else:
-        st.info("No user message has been analyzed yet.")
+        st.info(t("no_analyzed_message", lang))
 
-    st.subheader("Dialogue Plan")
+    st.subheader(t("dialogue_plan", lang))
     if st.session_state.last_dialogue_plan:
         st.json(st.session_state.last_dialogue_plan)
     else:
-        st.info("No dialogue objective has been selected yet.")
+        st.info(t("no_dialogue_objective", lang))
 
-    st.subheader("Recognized Financial Topics")
+    st.subheader(t("recognized_topics", lang))
     topics = st.session_state.last_understanding.get("recognized_topics", [])
     if topics:
         rows = [
@@ -461,21 +475,21 @@ def render_understanding_tab():
         ]
         st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     else:
-        st.info("No financial topic has been recognized in the current conversation yet.")
+        st.info(t("no_recognized_topic", lang))
 
-    st.subheader("RAG Data")
+    st.subheader(t("rag_data", lang))
     if st.session_state.last_retrieved_knowledge:
         st.json(st.session_state.last_retrieved_knowledge)
     else:
-        st.info("No local knowledge entry was retrieved for the current message.")
+        st.info(t("no_retrieved_knowledge", lang))
 
-    st.subheader("Tool Results")
+    st.subheader(t("tool_results", lang))
     if st.session_state.last_tool_results:
         st.json(st.session_state.last_tool_results)
     else:
-        st.info("No mocked tool was needed for the current message.")
+        st.info(t("no_tool_result", lang))
 
-    st.subheader("Guardrails")
+    st.subheader(t("guardrails", lang))
     st.json(st.session_state.last_guardrail_result)
 
 
@@ -483,7 +497,7 @@ with st.sidebar:
     render_sidebar()
 
 coach_tab, understanding_tab, business_metrics_tab, system_metrics_tab = st.tabs(
-    ["Coach", "Conversational Understanding", "Business Metrics", "System Metrics"]
+    [t("coach", lang), t("conversational_understanding", lang), t("business_metrics", lang), t("system_metrics", lang)]
 )
 
 with coach_tab:
@@ -492,13 +506,13 @@ with coach_tab:
         with st.chat_message(message["role"], avatar=avatar):
             st.write(message["content"])
 
-    with st.expander("Response Debug", expanded=False):
+    with st.expander(t("response_debug", lang), expanded=False):
         if st.session_state.last_response_debug:
             st.json(st.session_state.last_response_debug)
         else:
-            st.info("No response has been generated yet.")
+            st.info(t("no_generated_response", lang))
 
-    prompt = st.chat_input("Share what's on your mind...")
+    prompt = st.chat_input(t("chat_placeholder", lang))
     if prompt:
         understanding = analyze_message(prompt, st.session_state.conversation_context)
         user_model = {
@@ -549,7 +563,7 @@ with coach_tab:
             "retrieved_knowledge_used": response_details["retrieved_knowledge_used"],
         }
         st.session_state.messages.append({"role": "user", "content": prompt})
-        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state.messages.append({"role": "assistant", "content": localize_coach_response(response, lang)})
         st.rerun()
 
 with understanding_tab:
