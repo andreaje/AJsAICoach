@@ -8,6 +8,8 @@ DEFAULT_CONTEXT = {
     "last_product_or_concept": None,
     "resolved_reference": "None",
     "current_goal": "Not yet detected",
+    "stated_goal": None,
+    "goal_category": None,
     "current_fear": "Not yet detected",
     "unresolved_question": None,
     "persona": "Unknown",
@@ -55,6 +57,42 @@ ABSTRACT_TOPICS = {"financial security", "general finances", "investing", "retir
 CONCERN_TERMS = {"afraid", "anxious", "behind", "concerned", "nervous", "overwhelmed", "scared", "worried"}
 INVESTING_TERMS = {"invest", "investing", "investment", "investments", "stock", "stocks", "etf", "crypto", "bitcoin"}
 FAMILY_EDUCATION_TERMS = {"child", "children", "college", "daughter", "daughters", "kid", "kids", "son", "sons", "tuition"}
+GOAL_STATEMENT_PATTERNS = [
+    r"\b(?:i|we)\s+(?:really\s+)?(?:want|hope|need|plan|aim)\s+to\s+(.+)",
+    r"\b(?:i|we)(?:\s+would|'d)\s+like\s+to\s+(.+)",
+    r"\bmy\s+goal\s+is\s+(?:to\s+)?(.+)",
+    r"\b(?:i|we)\s+(?:really\s+)?want\s+(.+)",
+]
+GOAL_CATEGORY_RULES = {
+    "wealth_building": [
+        "financial freedom",
+        "financial independence",
+        "grow my money",
+        "grow my net worth",
+        "increase my net worth",
+        "make more money",
+        "millionaire",
+        "net worth",
+        "rich",
+        "wealth",
+        "wealthy",
+    ],
+}
+CONVERSATION_FRICTION_PHRASES = [
+    "already answered",
+    "already said",
+    "already told you",
+    "asked me that",
+    "i just said",
+    "i just told you",
+    "not listening",
+    "repeating yourself",
+    "that's what i said",
+]
+CONVERSATION_FRICTION_PATTERNS = [
+    r"\b(?:ask|asked|asking)\s+me\s+that\s+again\b",
+    r"\bsame\s+question\b",
+]
 
 
 def create_conversation_context() -> dict:
@@ -63,6 +101,36 @@ def create_conversation_context() -> dict:
 
 def tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9']+", text.lower())
+
+
+def clean_goal_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip(" .!?")).lower()
+
+
+def extract_stated_goal(text: str) -> str | None:
+    for pattern in GOAL_STATEMENT_PATTERNS:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            goal = clean_goal_text(match.group(1))
+            return goal if goal else None
+    return None
+
+
+def classify_goal_category(text: str) -> str | None:
+    lower_text = text.lower()
+    for category, phrases in GOAL_CATEGORY_RULES.items():
+        if any(phrase in lower_text for phrase in phrases):
+            return category
+    return None
+
+
+def detects_conversation_friction(text: str) -> bool:
+    lower_text = text.lower()
+    return (
+        "duh" in tokenize(text)
+        or any(phrase in lower_text for phrase in CONVERSATION_FRICTION_PHRASES)
+        or any(re.search(pattern, lower_text) for pattern in CONVERSATION_FRICTION_PATTERNS)
+    )
 
 
 def topic_term_matches(term: str, lower_text: str, tokens: set[str]) -> bool:
@@ -342,9 +410,17 @@ def classify_intent(text: str, resolved_reference: str | None = None) -> str:
     tokens = set(tokenize(text))
     lower_text = text.lower()
     educational_patterns = ["what is", "what are", "what's", "explain", "define", "meaning of", "how does", "how do"]
+    stated_goal = extract_stated_goal(text)
+    goal_category = classify_goal_category(text)
 
+    if detects_conversation_friction(text):
+        return "conversation_frustration"
     if resolved_reference:
         return "follow_up_question"
+    if "?" in text and goal_category == "wealth_building":
+        return "wealth_building_guidance"
+    if stated_goal:
+        return "goal_statement"
     if {"travel", "trip", "vacation"} & tokens and {"spend", "spending", "afford", "budget"} & tokens:
         return "budgeting_guidance"
     if ({"college", "tuition"} & tokens) and {"afford", "pay", "cost", "costs"} & tokens:
@@ -364,7 +440,7 @@ def classify_intent(text: str, resolved_reference: str | None = None) -> str:
     return "goal_discovery"
 
 
-def infer_user_model(text: str, topic: dict | None) -> dict:
+def infer_user_model(text: str, topic: dict | None, stated_goal: str | None = None) -> dict:
     tokens = set(tokenize(text))
     lower_text = text.lower()
     negated_knowledge = is_investing_learning_uncertainty(text)
@@ -390,6 +466,10 @@ def infer_user_model(text: str, topic: dict | None) -> dict:
         current_goal = "emergency savings"
     elif "comfortable" in tokens:
         current_goal = "financial comfort and stability"
+    elif classify_goal_category(text) == "wealth_building":
+        current_goal = "build wealth"
+    if stated_goal:
+        current_goal = stated_goal
 
     current_fear = "not yet clear"
     if "lost" in tokens and bool({"invested", "investment", "money"} & tokens):
@@ -425,6 +505,8 @@ def infer_user_model(text: str, topic: dict | None) -> dict:
     risk_level = "low tolerance" if confidence_level == "low" or fear_loss else "moderate"
     return {
         "current_goal": current_goal,
+        "stated_goal": stated_goal,
+        "goal_category": classify_goal_category(stated_goal or text),
         "current_fear": current_fear,
         "confidence_level": confidence_level,
         "financial_literacy": financial_literacy,
@@ -441,7 +523,8 @@ def analyze_message(user_message: str, conversation_context: dict) -> dict:
     correction = detect_user_correction(user_message)
     if correction and topic and correction["corrected_away_from"] in [topic["topic"], topic["label"].lower()]:
         topic = None
-    user_model = infer_user_model(user_message, topic)
+    stated_goal = extract_stated_goal(user_message)
+    user_model = infer_user_model(user_message, topic, stated_goal)
     intent = classify_intent(user_message, resolved_reference)
     concern = detect_concern(user_message)
     extracted_slots = extract_planning_slots(user_message, conversation_context)
@@ -451,6 +534,17 @@ def analyze_message(user_message: str, conversation_context: dict) -> dict:
         prior_goal = conversation_context.get("current_goal")
         if prior_goal and prior_goal != "Not yet detected":
             user_model["current_goal"] = prior_goal
+            user_model["stated_goal"] = conversation_context.get("stated_goal")
+            user_model["goal_category"] = conversation_context.get("goal_category")
+    prior_stated_goal = conversation_context.get("stated_goal")
+    prior_goal_category = conversation_context.get("goal_category")
+    if (
+        not user_model["stated_goal"]
+        and prior_stated_goal
+        and user_model["goal_category"] == prior_goal_category
+    ):
+        user_model["current_goal"] = prior_stated_goal
+        user_model["stated_goal"] = prior_stated_goal
     if "comfortable" in tokenize(user_message) and (
         conversation_context.get("parent_topic") == "retirement planning"
         or conversation_context.get("current_goal") == "retirement security"
@@ -496,6 +590,8 @@ def update_conversation_context(context: dict, user_message: str, understanding:
     context["last_product_or_concept"] = understanding["topic_label"]
     context["resolved_reference"] = understanding["resolved_reference"]
     context["current_goal"] = understanding["current_goal"]
+    context["stated_goal"] = understanding.get("stated_goal")
+    context["goal_category"] = understanding.get("goal_category")
     context["current_fear"] = understanding["current_fear"]
     context["persona"] = understanding["persona"]
     context["confidence_level"] = understanding["confidence_level"]

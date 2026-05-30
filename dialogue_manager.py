@@ -40,6 +40,8 @@ def choose_follow_up(understanding: dict, user_model: dict) -> tuple[str | None,
     topic = understanding.get("primary_topic")
     concern = understanding.get("concern_type")
     goal = user_model.get("current_goal")
+    stated_goal = understanding.get("stated_goal")
+    goal_category = understanding.get("goal_category")
     slots = understanding.get("planning_slots", {})
 
     if understanding.get("intent") == "budgeting_guidance":
@@ -78,6 +80,10 @@ def choose_follow_up(understanding: dict, user_model: dict) -> tuple[str | None,
         return "meaning of a comfortable retirement", "When you picture a comfortable retirement, what matters most: covering essentials, having room for extras, or both?"
     if goal == "financial comfort and stability":
         return "first priority for financial stability", "Would it help to start with monthly breathing room, an emergency cushion, or a plan for existing debt?"
+    if goal_category == "wealth_building":
+        return "wealth-building baseline", "Do you currently have income left after monthly expenses that you could consistently save or invest?"
+    if stated_goal:
+        return "goal baseline", "What would meaningful progress look like over the next year?"
     if topic in FOLLOW_UPS:
         return f"how {topic} fits the user's goal", FOLLOW_UPS[topic]
     if understanding.get("intent") == "emotional_concern":
@@ -115,6 +121,16 @@ def decide_dialogue_plan(
         dialogue_act = "answer_and_gather_college_context"
         response_goal = "Address college affordability and gather the timeline needed for planning."
         must_address = ["college affordability", "education timeline"]
+        next_information_needed, follow_up_question = choose_follow_up(understanding, user_model)
+    elif intent == "wealth_building_guidance":
+        dialogue_act = "answer_and_gather_wealth_context"
+        response_goal = "Address the wealth-building goal directly and gather the most useful starting point."
+        must_address = ["wealth-building goal", "realistic path", "avoid get-rich-quick framing"]
+        next_information_needed, follow_up_question = choose_follow_up(understanding, user_model)
+    elif intent == "goal_statement":
+        dialogue_act = "reflect_goal_and_gather_context"
+        response_goal = "Reflect the user's stated goal and gather the first useful planning detail."
+        must_address = ["stated goal", "next planning detail"]
         next_information_needed, follow_up_question = choose_follow_up(understanding, user_model)
     elif understanding.get("user_correction"):
         dialogue_act = "summarize"
@@ -169,13 +185,20 @@ def decide_dialogue_plan(
         dialogue_act = "suggest_next_step"
         response_goal = "Offer a concrete next step instead of restating the previous response."
         must_address = ["practical next step"]
-        follow_up_question = "Would it help to focus on one practical next step together?"
+        if understanding.get("goal_category") == "wealth_building":
+            next_information_needed = "wealth-building baseline"
+            follow_up_question = "Do you currently have income left after monthly expenses that you could consistently save or invest?"
+        else:
+            follow_up_question = "Would it help to focus on one practical next step together?"
 
     previous_question = normalize_question(context.get("last_assistant_question"))
     if normalize_question(follow_up_question) == previous_question:
         if next_information_needed == "education timeline":
             next_information_needed = "child age"
             follow_up_question = "How old is your child now?"
+        elif understanding.get("goal_category") == "wealth_building":
+            next_information_needed = "most useful wealth-building lever"
+            follow_up_question = "Which feels most realistic to work on first: earning more, saving more of your current income, or learning about long-term investing?"
         else:
             follow_up_question = "Would it help to focus on one practical next step together?"
     if normalize_question(follow_up_question) == previous_question:

@@ -1,4 +1,6 @@
 import importlib
+from datetime import datetime, timezone
+from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -35,8 +37,21 @@ if "messages" not in st.session_state:
         {
             "role": "assistant",
             "content": t("opening_message", lang),
+            "message_id": "assistant-opening-message",
+            "feedback_context": {
+                "user_message_context": "",
+                "detected_intent": None,
+                "primary_topic": None,
+                "persona": None,
+                "risk_level": None,
+                "language": lang,
+            },
         }
     ]
+
+# In production, this feedback would be logged to an analytics/event pipeline rather than Streamlit session state.
+if "feedback_records" not in st.session_state:
+    st.session_state.feedback_records = {}
 
 fresh_context = create_conversation_context()
 existing_context = st.session_state.get("conversation_context", {})
@@ -78,6 +93,68 @@ def reset_conversation():
 def update_opening_message():
     if len(st.session_state.get("messages", [])) == 1 and st.session_state.messages[0]["role"] == "assistant":
         st.session_state.messages[0]["content"] = t("opening_message", st.session_state.language)
+        st.session_state.messages[0].setdefault("feedback_context", {})["language"] = st.session_state.language
+
+
+def ensure_assistant_message_metadata():
+    for message in st.session_state.messages:
+        if message["role"] != "assistant":
+            continue
+        message.setdefault("message_id", f"assistant-{uuid4()}")
+        message.setdefault(
+            "feedback_context",
+            {
+                "user_message_context": "",
+                "detected_intent": None,
+                "primary_topic": None,
+                "persona": None,
+                "risk_level": None,
+                "language": st.session_state.language,
+            },
+        )
+
+
+def record_feedback(message: dict, feedback_value: str):
+    context = message["feedback_context"]
+    st.session_state.feedback_records[message["message_id"]] = {
+        "message_id": message["message_id"],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "feedback_value": feedback_value,
+        "user_message_context": context["user_message_context"],
+        "assistant_response": message["content"],
+        "detected_intent": context["detected_intent"],
+        "primary_topic": context["primary_topic"],
+        "persona": context["persona"],
+        "risk_level": context["risk_level"],
+        "language": context["language"],
+    }
+
+
+def render_feedback_controls(message: dict):
+    message_id = message["message_id"]
+    down_column, up_column, _ = st.columns([0.07, 0.07, 0.86])
+    if down_column.button("👎", key=f"feedback-down-{message_id}"):
+        record_feedback(message, "thumbs_down")
+    if up_column.button("👍", key=f"feedback-up-{message_id}"):
+        record_feedback(message, "thumbs_up")
+    if message_id in st.session_state.feedback_records:
+        st.caption("Feedback recorded.")
+
+
+def render_feedback_summary():
+    records = list(st.session_state.feedback_records.values())
+    thumbs_up_count = sum(record["feedback_value"] == "thumbs_up" for record in records)
+    thumbs_down_count = sum(record["feedback_value"] == "thumbs_down" for record in records)
+    assistant_response_count = sum(message["role"] == "assistant" for message in st.session_state.messages)
+    feedback_rate = len(records) / assistant_response_count if assistant_response_count else 0
+    thumbs_up_percentage = thumbs_up_count / len(records) if records else 0
+
+    st.header("Coach Response Feedback")
+    feedback_metrics = st.columns(4)
+    feedback_metrics[0].metric("Thumbs Up", thumbs_up_count)
+    feedback_metrics[1].metric("Thumbs Down", thumbs_down_count)
+    feedback_metrics[2].metric("Feedback Rate", f"{feedback_rate:.1%}")
+    feedback_metrics[3].metric("Thumbs Up Percentage", f"{thumbs_up_percentage:.1%}")
 
 
 def multi_filter(label: str, values: pd.Series, key: str) -> list[str]:
@@ -336,6 +413,7 @@ def render_business_metrics():
 
 def render_system_metrics():
     lang = st.session_state.language
+    render_feedback_summary()
     users, sessions = load_analytics_data()
     if users is None:
         return
@@ -493,6 +571,8 @@ def render_understanding_tab():
     st.json(st.session_state.last_guardrail_result)
 
 
+ensure_assistant_message_metadata()
+
 with st.sidebar:
     render_sidebar()
 
@@ -505,6 +585,8 @@ with coach_tab:
         avatar = ASSISTANT_AVATAR if message["role"] == "assistant" else None
         with st.chat_message(message["role"], avatar=avatar):
             st.write(message["content"])
+            if message["role"] == "assistant" and message["message_id"] != "assistant-opening-message":
+                render_feedback_controls(message)
 
     with st.expander(t("response_debug", lang), expanded=False):
         if st.session_state.last_response_debug:
@@ -563,7 +645,21 @@ with coach_tab:
             "retrieved_knowledge_used": response_details["retrieved_knowledge_used"],
         }
         st.session_state.messages.append({"role": "user", "content": prompt})
-        st.session_state.messages.append({"role": "assistant", "content": localize_coach_response(response, lang)})
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": localize_coach_response(response, lang),
+                "message_id": f"assistant-{uuid4()}",
+                "feedback_context": {
+                    "user_message_context": prompt,
+                    "detected_intent": understanding.get("intent"),
+                    "primary_topic": understanding.get("primary_topic"),
+                    "persona": understanding.get("persona"),
+                    "risk_level": understanding.get("risk_level"),
+                    "language": lang,
+                },
+            }
+        )
         st.rerun()
 
 with understanding_tab:

@@ -11,6 +11,10 @@ REFLECTIONS = {
 }
 
 
+def asks_for_speed(user_message: str) -> bool:
+    return bool(re.search(r"\b(?:fast\w*|quick\w*|rapid\w*|soon)\b", user_message.lower()))
+
+
 def format_tool_results(tool_results: dict) -> str:
     parts = []
     if "market_price" in tool_results:
@@ -88,6 +92,22 @@ def address_question_or_concern(user_message: str, understanding: dict) -> str:
         return (
             "That is a useful goal. Financial comfort often starts with a little monthly breathing room and a buffer "
             "for unexpected expenses, then grows from there."
+        )
+    if understanding.get("goal_category") == "wealth_building":
+        if asks_for_speed(user_message):
+            return (
+                "There is no reliable shortcut to building wealth quickly. The strongest general levers are increasing "
+                "income, consistently keeping part of what you earn, avoiding high-interest debt, and investing for "
+                "the long term in a diversified way. Promises of fast returns usually mean taking a real risk of loss."
+            )
+        return (
+            "Got it: building wealth is the goal. That is broader than a single product or tactic, so the useful "
+            "starting point is to choose the lever that can make the biggest practical difference first."
+        )
+    if understanding.get("stated_goal"):
+        return (
+            f"You said your goal is to {understanding['stated_goal']}. Let us make that concrete enough to identify "
+            "a useful first step."
         )
     if understanding.get("asked_question") and not understanding.get("primary_topic") == "general finances":
         return "It makes sense to pause and get a clear answer before deciding what to do next."
@@ -247,6 +267,11 @@ def _generate_template_response(
     if understanding.get("user_correction"):
         return "\n\n".join(part for part in [
             correction_response(understanding),
+            dialogue_plan.get("follow_up_question"),
+        ] if part)
+    if understanding.get("intent") == "conversation_frustration":
+        return "\n\n".join(part for part in [
+            "You are right. Let us keep this concrete.",
             dialogue_plan.get("follow_up_question"),
         ] if part)
     if dialogue_plan.get("avoid_repetition"):
