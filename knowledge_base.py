@@ -1,3 +1,6 @@
+from functools import lru_cache
+
+
 KNOWLEDGE_BASE = {
     "bitcoin": "Bitcoin is a decentralized digital currency that is not controlled by a government or bank. Its value can be highly volatile.",
     "etf": "An ETF (Exchange-Traded Fund) is a collection of investments that can be bought and sold like a stock.",
@@ -24,6 +27,7 @@ TOPIC_KNOWLEDGE_ALIASES = {
 }
 
 
+@lru_cache(maxsize=None)
 def retrieve_knowledge(topic: str | None) -> dict:
     normalized_topic = (topic or "").lower().replace(" ", "_")
     normalized_topic = TOPIC_KNOWLEDGE_ALIASES.get(normalized_topic, normalized_topic)

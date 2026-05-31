@@ -15,6 +15,9 @@ DEFAULT_CONTEXT = {
     "persona": "Unknown",
     "confidence_level": "Unknown",
     "financial_literacy": "Unknown",
+    "knowledge_level": "Unknown",
+    "knowledge_level_confidence": "Unknown",
+    "knowledge_level_evidence": "Not yet assessed",
     "coaching_style": "Supportive",
     "risk_level": "Unknown",
     "recent_referents": [],
@@ -112,6 +115,35 @@ CONVERSATION_FRICTION_PATTERNS = [
 
 def create_conversation_context() -> dict:
     return deepcopy(DEFAULT_CONTEXT)
+
+
+PROFILE_UPDATE_FIELDS = {
+    "primary_topic",
+    "parent_topic",
+    "last_product_or_concept",
+    "current_goal",
+    "stated_goal",
+    "goal_category",
+    "current_fear",
+    "persona",
+    "confidence_level",
+    "financial_literacy",
+    "knowledge_level",
+    "coaching_style",
+    "risk_level",
+}
+
+
+def apply_profile_update_operations(profile: dict, operations: dict) -> dict:
+    for field in operations.get("field_invalidations", []):
+        if field in PROFILE_UPDATE_FIELDS:
+            target_field = "topic_label" if field == "last_product_or_concept" and "topic_label" in profile else field
+            profile[target_field] = deepcopy(DEFAULT_CONTEXT.get(field))
+    for field, value in operations.get("field_updates", {}).items():
+        if field in PROFILE_UPDATE_FIELDS:
+            target_field = "topic_label" if field == "last_product_or_concept" and "topic_label" in profile else field
+            profile[target_field] = value
+    return profile
 
 
 def tokenize(text: str) -> list[str]:
@@ -503,7 +535,7 @@ def infer_user_model(text: str, topic: dict | None, stated_goal: str | None = No
         current_fear = "not understanding investing"
 
     confidence_level = "low" if current_fear != "not yet clear" or negated_knowledge else "medium"
-    financial_literacy = "beginner" if confusion or negated_knowledge else "unknown"
+    financial_literacy = "beginner" if confusion or negated_knowledge else "intermediate"
     persona = "steady builder"
     if topic and topic["topic"] == "bitcoin" and confidence_level == "low":
         persona = "cautious_beginner"
@@ -525,6 +557,9 @@ def infer_user_model(text: str, topic: dict | None, stated_goal: str | None = No
         "current_fear": current_fear,
         "confidence_level": confidence_level,
         "financial_literacy": financial_literacy,
+        "knowledge_level": financial_literacy,
+        "knowledge_level_confidence": "low",
+        "knowledge_level_evidence": "Fallback estimate from the user's wording.",
         "coaching_style": coaching_style,
         "persona": persona,
         "risk_level": risk_level,
@@ -611,6 +646,9 @@ def update_conversation_context(context: dict, user_message: str, understanding:
     context["persona"] = understanding["persona"]
     context["confidence_level"] = understanding["confidence_level"]
     context["financial_literacy"] = understanding["financial_literacy"]
+    context["knowledge_level"] = understanding["knowledge_level"]
+    context["knowledge_level_confidence"] = understanding["knowledge_level_confidence"]
+    context["knowledge_level_evidence"] = understanding["knowledge_level_evidence"]
     context["coaching_style"] = understanding["coaching_style"]
     context["risk_level"] = understanding["risk_level"]
     context["unresolved_question"] = user_message if "?" in user_message else None

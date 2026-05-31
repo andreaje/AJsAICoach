@@ -1,3 +1,6 @@
+from functools import lru_cache
+
+
 TRANSLATIONS = {
     "en": {
         "language": "Language",
@@ -22,10 +25,18 @@ TRANSLATIONS = {
         "coaching_style": "Coaching Style",
         "risk_level": "Risk Level",
         "reset_conversation": "Reset conversation",
+        "debug_mode": "Debug mode",
+        "log_out": "Log out",
+        "feedback_recorded": "Feedback recorded.",
+        "thinking_through_goals": "Thinking through your goals...",
         "filters": "Filters",
         "filter_help": "Select one or more values in each dropdown.",
         "user_type": "User type",
         "financial_literacy": "Financial literacy",
+        "knowledge_level": "Knowledge Level",
+        "knowledge_level_confidence": "Knowledge Level Confidence",
+        "knowledge_level_evidence": "Knowledge Level Evidence",
+        "financial_situation_confidence": "Financial Situation Confidence",
         "topic_category": "Topic category",
         "acquisition_engagement": "Acquisition & Engagement",
         "funnel": "Funnel",
@@ -108,10 +119,18 @@ TRANSLATIONS = {
         "coaching_style": "Coaching-Stil",
         "risk_level": "Risikoprofil",
         "reset_conversation": "Gespräch zurücksetzen",
+        "debug_mode": "Debug-Modus",
+        "log_out": "Abmelden",
+        "feedback_recorded": "Feedback gespeichert.",
+        "thinking_through_goals": "Ihre Ziele werden durchdacht...",
         "filters": "Filter",
         "filter_help": "Wählen Sie in jedem Dropdown eine oder mehrere Optionen aus.",
         "user_type": "Nutzertyp",
         "financial_literacy": "Finanzwissen",
+        "knowledge_level": "Wissensstand",
+        "knowledge_level_confidence": "Sicherheit der Wissensbewertung",
+        "knowledge_level_evidence": "Begründung des Wissensstands",
+        "financial_situation_confidence": "Zuversicht in die finanzielle Situation",
         "topic_category": "Themenkategorie",
         "acquisition_engagement": "Akquise & Nutzung",
         "funnel": "Funnel",
@@ -194,10 +213,18 @@ TRANSLATIONS = {
         "coaching_style": "Estilo de coaching",
         "risk_level": "Nivel de riesgo",
         "reset_conversation": "Reiniciar conversación",
+        "debug_mode": "Modo de depuracion",
+        "log_out": "Cerrar sesion",
+        "feedback_recorded": "Comentarios guardados.",
+        "thinking_through_goals": "Analizando sus objetivos...",
         "filters": "Filtros",
         "filter_help": "Seleccione uno o más valores en cada menú desplegable.",
         "user_type": "Tipo de usuario",
         "financial_literacy": "Conocimientos financieros",
+        "knowledge_level": "Nivel de conocimientos",
+        "knowledge_level_confidence": "Confianza en la evaluación del nivel",
+        "knowledge_level_evidence": "Evidencia del nivel de conocimientos",
+        "financial_situation_confidence": "Confianza en la situación financiera",
         "topic_category": "Categoría temática",
         "acquisition_engagement": "Adquisición y participación",
         "funnel": "Embudo",
@@ -303,10 +330,12 @@ COACH_TRANSLATIONS = {
 }
 
 
+@lru_cache(maxsize=None)
 def t(key: str, lang: str = "en") -> str:
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, TRANSLATIONS["en"].get(key, key))
 
 
+@lru_cache(maxsize=256)
 def localize_coach_response(text: str, lang: str) -> str:
     if lang == "en":
         return text

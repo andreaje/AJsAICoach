@@ -1,5 +1,8 @@
+import hmac
 import importlib
+from pathlib import Path
 from datetime import datetime, timezone
+from time import perf_counter
 from uuid import uuid4
 
 import pandas as pd
@@ -8,6 +11,7 @@ import streamlit as st
 from conversation_state import (
     TOPIC_RULES,
     analyze_message,
+    apply_profile_update_operations,
     create_conversation_context,
     record_assistant_response,
     update_conversation_context,
@@ -16,11 +20,51 @@ from dialogue_manager import decide_dialogue_plan, record_dialogue_plan
 from guardrails import evaluate_guardrails
 from i18n import localize_coach_response, t
 from knowledge_base import retrieve_knowledge
-from llm_client import generate_response_details
+from llm_client import classify_knowledge_level, generate_llm_response, resolve_openai_api_key
 import mock_data as mock_data_module
 from tools import collect_tool_results
 
 st.set_page_config(page_title="AJ's AI Coach", layout="wide")
+
+
+def require_authentication():
+    try:
+        app_password = str(st.secrets["APP_PASSWORD"])
+    except Exception:
+        st.error("APP_PASSWORD is missing from Streamlit secrets. Add it before using the app.")
+        st.stop()
+
+    if st.session_state.get("authenticated"):
+        return
+
+    gate = st.empty()
+    with gate.container():
+        st.title("AJ's AI Coach")
+        st.subheader("Demo access required")
+        st.caption("Enter the prototype access code to continue.")
+        st.markdown(
+            """
+            <style>
+            input[aria-label="Prototype Access Code"] {
+                -webkit-text-security: disc;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.form("prototype_access_form"):
+            entered_access_code = st.text_input("Prototype Access Code", autocomplete="one-time-code")
+            submitted = st.form_submit_button("Enter")
+    if submitted:
+        if hmac.compare_digest(entered_access_code, app_password):
+            st.session_state.authenticated = True
+            gate.empty()
+            st.rerun()
+        st.error("Incorrect access code.")
+    st.stop()
+
+
+require_authentication()
 
 st.title("🌴 AJ's AI Coach")
 if "language" not in st.session_state:
@@ -80,9 +124,27 @@ if "last_response_debug" not in st.session_state:
     st.session_state.last_response_debug = {}
 
 
-@st.cache_data
+@st.cache_resource
 def load_mock_data(schema_version: int):
     return mock_data_module.generate_mock_data()
+
+
+@st.cache_data
+def load_design_log(path: str, modified_ns: int) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+def render_architectural_design_log():
+    design_log_path = Path(__file__).resolve().parent / "AJs_AI-Coach_Design_Log.md"
+    if not design_log_path.is_file():
+        st.error("Architectural design log not found.")
+        return
+    design_log = load_design_log(str(design_log_path), design_log_path.stat().st_mtime_ns)
+    if not design_log.strip():
+        st.info("The architectural design log is currently empty.")
+        return
+    with st.container(key="architectural_design_log", height=480, border=False):
+        st.markdown(design_log)
 
 
 def reset_conversation():
@@ -94,6 +156,19 @@ def update_opening_message():
     if len(st.session_state.get("messages", [])) == 1 and st.session_state.messages[0]["role"] == "assistant":
         st.session_state.messages[0]["content"] = t("opening_message", st.session_state.language)
         st.session_state.messages[0].setdefault("feedback_context", {})["language"] = st.session_state.language
+
+
+def get_openai_key_debug(key_source: str) -> dict:
+    try:
+        secrets_contains_key = "OPENAI_API_KEY" in st.secrets
+    except Exception:
+        secrets_contains_key = False
+    return {
+        "cwd": str(Path.cwd()),
+        ".streamlit/secrets.toml exists": Path(".streamlit/secrets.toml").is_file(),
+        "st.secrets contains OPENAI_API_KEY": secrets_contains_key,
+        "OPENAI_API_KEY source": key_source,
+    }
 
 
 def ensure_assistant_message_metadata():
@@ -138,7 +213,7 @@ def render_feedback_controls(message: dict):
     if up_column.button("👍", key=f"feedback-up-{message_id}"):
         record_feedback(message, "thumbs_up")
     if message_id in st.session_state.feedback_records:
-        st.caption("Feedback recorded.")
+        st.caption(t("feedback_recorded", st.session_state.language))
 
 
 def render_feedback_summary():
@@ -472,7 +547,13 @@ def render_system_metrics():
     diagnostic_spec = {
         "mark": {"type": "bar", "cornerRadiusEnd": 3},
         "encoding": {
-            "y": {"field": "metric", "type": "nominal", "sort": "-x", "title": None},
+            "y": {
+                "field": "metric",
+                "type": "nominal",
+                "sort": "-x",
+                "title": None,
+                "axis": {"labelLimit": 320},
+            },
             "x": {"field": "score_pct", "type": "quantitative", "title": "Score (%)"},
             "color": {"field": "module", "type": "nominal", "title": "Diagnostic Layer"},
             "tooltip": [
@@ -488,7 +569,11 @@ def render_system_metrics():
 
 def render_sidebar():
     lang = st.session_state.language
-    language_options = {"English": "en", "German": "de", "Spanish": "es"}
+    language_options = {
+        t("english", lang): "en",
+        t("german", lang): "de",
+        t("spanish", lang): "es",
+    }
     selected_label = next(label for label, code in language_options.items() if code == lang)
     selected_language = st.selectbox(
         t("language", lang),
@@ -500,6 +585,10 @@ def render_sidebar():
         update_opening_message()
         st.rerun()
     st.caption(t("prototype_note", lang))
+    st.toggle(t("debug_mode", lang), key="debug_mode")
+    if st.button(t("log_out", lang)):
+        st.session_state.clear()
+        st.rerun()
 
     context = st.session_state.conversation_context
     st.header(t("customer_understanding", lang))
@@ -510,7 +599,10 @@ def render_sidebar():
         t("current_goal", lang): context["current_goal"],
         t("current_fear", lang): context["current_fear"],
         t("persona", lang): context["persona"],
-        t("confidence", lang): context["confidence_level"],
+        t("knowledge_level", lang): context["knowledge_level"],
+        t("knowledge_level_confidence", lang): context["knowledge_level_confidence"],
+        t("knowledge_level_evidence", lang): context["knowledge_level_evidence"],
+        t("financial_situation_confidence", lang): context["confidence_level"],
         t("coaching_style", lang): context["coaching_style"],
         t("risk_level", lang): context["risk_level"],
     }
@@ -576,58 +668,116 @@ ensure_assistant_message_metadata()
 with st.sidebar:
     render_sidebar()
 
-coach_tab, understanding_tab, business_metrics_tab, system_metrics_tab = st.tabs(
-    [t("coach", lang), t("conversational_understanding", lang), t("business_metrics", lang), t("system_metrics", lang)]
+_, openai_api_key_source = resolve_openai_api_key(
+    st.secrets,
+    api_key=st.session_state.get("openai_api_key"),
+)
+openai_key_debug = get_openai_key_debug(openai_api_key_source)
+
+active_view = st.radio(
+    "View",
+    ["coach", "conversational_understanding", "business_metrics", "system_metrics", "architectural_design_log"],
+    format_func=lambda view: "Architectural Design Log" if view == "architectural_design_log" else t(view, lang),
+    horizontal=True,
+    label_visibility="collapsed",
+    key="active_view",
 )
 
-with coach_tab:
-    for message in st.session_state.messages:
-        avatar = ASSISTANT_AVATAR if message["role"] == "assistant" else None
-        with st.chat_message(message["role"], avatar=avatar):
-            st.write(message["content"])
-            if message["role"] == "assistant" and message["message_id"] != "assistant-opening-message":
-                render_feedback_controls(message)
+if active_view == "coach":
+    conversation_scroll = st.container(
+        key="conversation_scroll",
+        height=480,
+        border=False,
+        autoscroll=True,
+    )
+    with conversation_scroll:
+        for message in st.session_state.messages:
+            avatar = ASSISTANT_AVATAR if message["role"] == "assistant" else None
+            with st.chat_message(message["role"], avatar=avatar):
+                st.write(message["content"])
+                if message["role"] == "assistant" and message["message_id"] != "assistant-opening-message":
+                    render_feedback_controls(message)
 
-    with st.expander(t("response_debug", lang), expanded=False):
-        if st.session_state.last_response_debug:
-            st.json(st.session_state.last_response_debug)
-        else:
-            st.info(t("no_generated_response", lang))
+        if st.session_state.get("debug_mode"):
+            with st.expander(t("response_debug", lang), expanded=False):
+                st.json({**st.session_state.last_response_debug, **openai_key_debug})
 
     prompt = st.chat_input(t("chat_placeholder", lang))
     if prompt:
-        understanding = analyze_message(prompt, st.session_state.conversation_context)
-        user_model = {
-            key: understanding.get(key)
-            for key in [
-                "current_goal",
-                "current_fear",
-                "confidence_level",
-                "financial_literacy",
-                "coaching_style",
-                "persona",
-                "risk_level",
-            ]
-        }
-        dialogue_plan = decide_dialogue_plan(
-            understanding,
-            user_model,
-            prompt,
-            st.session_state.conversation_context,
+        total_started = perf_counter()
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with conversation_scroll:
+            with st.chat_message("user"):
+                st.write(prompt)
+            with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
+                with st.spinner(t("thinking_through_goals", lang)):
+                    understanding_started = perf_counter()
+                    knowledge_level = classify_knowledge_level(
+                        user_message=prompt,
+                        conversation_context=st.session_state.conversation_context,
+                        recent_conversation_history=[
+                            {"role": message.get("role"), "content": message.get("content", "")}
+                            for message in st.session_state.messages[-7:-1]
+                        ],
+                        api_key=st.session_state.get("openai_api_key"),
+                        streamlit_secrets=st.secrets,
+                    )
+                    apply_profile_update_operations(st.session_state.conversation_context, knowledge_level)
+                    understanding = analyze_message(prompt, st.session_state.conversation_context)
+                    apply_profile_update_operations(understanding, knowledge_level)
+                    understanding.update(knowledge_level)
+                    understanding["financial_literacy"] = knowledge_level["knowledge_level"]
+                    understanding["knowledge_level_evidence"] = knowledge_level["evidence"]
+                    user_model = {
+                        key: understanding.get(key)
+                        for key in [
+                            "current_goal",
+                            "current_fear",
+                            "confidence_level",
+                            "financial_literacy",
+                            "knowledge_level",
+                            "coaching_style",
+                            "persona",
+                            "risk_level",
+                        ]
+                    }
+                    dialogue_plan = decide_dialogue_plan(
+                        understanding,
+                        user_model,
+                        prompt,
+                        st.session_state.conversation_context,
+                    )
+                    conversation_understanding_ms = (perf_counter() - understanding_started) * 1000
+
+                    retrieval_started = perf_counter()
+                    retrieved_knowledge = retrieve_knowledge(understanding["primary_topic"])
+                    tool_results = collect_tool_results(prompt, understanding["primary_topic"])
+                    retrieval_ms = (perf_counter() - retrieval_started) * 1000
+
+                    guardrails_started = perf_counter()
+                    guardrail_result = evaluate_guardrails(prompt)
+                    guardrails_ms = (perf_counter() - guardrails_started) * 1000
+
+                    openai_started = perf_counter()
+                    response_details = generate_llm_response(
+                        user_message=prompt,
+                        conversation_context=st.session_state.conversation_context,
+                        dialogue_plan=dialogue_plan,
+                        retrieved_knowledge=retrieved_knowledge,
+                        guardrail_decision=guardrail_result,
+                        language=lang,
+                        understanding=understanding,
+                        tool_results=tool_results,
+                        api_key=st.session_state.get("openai_api_key"),
+                        streamlit_secrets=st.secrets,
+                    )
+                    openai_call_ms = (perf_counter() - openai_started) * 1000
+        response = response_details["response_text"]
+        assistant_content = (
+            localize_coach_response(response, lang)
+            if response_details["response_source"] != "llm"
+            else response
         )
-        retrieved_knowledge = retrieve_knowledge(understanding["primary_topic"])
-        tool_results = collect_tool_results(prompt, understanding["primary_topic"])
-        guardrail_result = evaluate_guardrails(prompt)
-        response_details = generate_response_details(
-            prompt,
-            understanding,
-            retrieved_knowledge,
-            tool_results,
-            st.session_state.conversation_context,
-            dialogue_plan,
-            guardrail_result,
-        )
-        response = response_details["text"]
         update_conversation_context(st.session_state.conversation_context, prompt, understanding)
         record_assistant_response(st.session_state.conversation_context, response)
         record_dialogue_plan(st.session_state.conversation_context, dialogue_plan)
@@ -641,14 +791,30 @@ with coach_tab:
             "primary_topic": understanding["primary_topic"],
             "parent_topic": understanding["parent_topic"],
             "dialogue_act": dialogue_plan["dialogue_act"],
+            "knowledge_level_source": understanding["knowledge_level_source"],
+            "updated_fields": knowledge_level["field_updates"],
+            "invalidated_fields": knowledge_level["field_invalidations"],
+            "unchanged_fields": knowledge_level["unchanged_fields"],
+            "update_confidence": knowledge_level["update_confidence"],
+            "OPENAI_API_KEY detected": response_details["openai_api_key_detected"],
+            "OPENAI_API_KEY source": response_details["openai_api_key_source"],
+            "openai_model": response_details["openai_model"],
+            "OpenAI API call attempted": response_details["openai_api_call_attempted"],
+            "OpenAI API call succeeded": response_details["openai_api_call_succeeded"],
+            "openai_error_type": response_details["openai_error_type"],
+            "openai_error_message": response_details["openai_error_message"],
             "response_source": response_details["response_source"],
-            "retrieved_knowledge_used": response_details["retrieved_knowledge_used"],
+            "retrieved_knowledge_used": retrieved_knowledge.get("topic") if retrieved_knowledge else None,
+            "conversation_understanding_ms": round(conversation_understanding_ms, 1),
+            "retrieval_ms": round(retrieval_ms, 1),
+            "guardrails_ms": round(guardrails_ms, 1),
+            "openai_call_ms": round(openai_call_ms, 1),
+            "total_response_ms": round((perf_counter() - total_started) * 1000, 1),
         }
-        st.session_state.messages.append({"role": "user", "content": prompt})
         st.session_state.messages.append(
             {
                 "role": "assistant",
-                "content": localize_coach_response(response, lang),
+                "content": assistant_content,
                 "message_id": f"assistant-{uuid4()}",
                 "feedback_context": {
                     "user_message_context": prompt,
@@ -662,11 +828,14 @@ with coach_tab:
         )
         st.rerun()
 
-with understanding_tab:
+elif active_view == "conversational_understanding":
     render_understanding_tab()
 
-with business_metrics_tab:
+elif active_view == "business_metrics":
     render_business_metrics()
 
-with system_metrics_tab:
+elif active_view == "system_metrics":
     render_system_metrics()
+
+elif active_view == "architectural_design_log":
+    render_architectural_design_log()

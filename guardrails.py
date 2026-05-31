@@ -26,8 +26,9 @@ def evaluate_guardrails(user_message: str) -> dict:
 
 
 def guardrail_message(guardrail_result: dict) -> str:
-    if guardrail_result["mode"] != "educational_only":
+    if guardrail_result["mode"] == "standard":
         return ""
     return (
-        "I can explain the risks and tradeoffs in general terms, but I cannot tell you what is right for your personal situation. "
+        "I can explain the risks and tradeoffs in general terms, but I cannot tell you what is right for your personal "
+        "situation. For guidance tailored to your circumstances, consider consulting an appropriate qualified professional. "
     )

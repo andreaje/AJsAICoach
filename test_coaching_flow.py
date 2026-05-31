@@ -2,6 +2,7 @@ import unittest
 
 from conversation_state import (
     analyze_message,
+    apply_profile_update_operations,
     classify_goal_category,
     create_conversation_context,
     extract_stated_goal,
@@ -70,6 +71,25 @@ class GoalExtractionTests(unittest.TestCase):
 
 
 class CoachingFlowTests(unittest.TestCase):
+    def test_structured_profile_correction_invalidates_stale_goal_before_update(self):
+        context = create_conversation_context()
+        context.update({"primary_topic": "stocks", "current_goal": "learn about stocks"})
+
+        apply_profile_update_operations(
+            context,
+            {
+                "field_invalidations": ["current_goal"],
+                "field_updates": {
+                    "current_goal": "get investment guidance while managing fear of loss",
+                    "current_fear": "losing money",
+                },
+            },
+        )
+
+        self.assertEqual(context["primary_topic"], "stocks")
+        self.assertEqual(context["current_goal"], "get investment guidance while managing fear of loss")
+        self.assertEqual(context["current_fear"], "losing money")
+
     def test_reflects_unknown_goal_instead_of_asking_for_goal_again(self):
         understanding, _, response = run_turn("I'd like to save for a sabbatical.", create_conversation_context())
 
