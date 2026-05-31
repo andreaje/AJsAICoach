@@ -354,6 +354,7 @@ For now, modular Python is sufficient; LangGraph is a logical next-step candidat
 * clear architecture
 * LLM-backed response direction
 * structured state model
+* state consistency under user correction
 * dialogue-management focus
 * multilingual POC
 * business and system metrics separation
@@ -361,9 +362,7 @@ For now, modular Python is sufficient; LangGraph is a logical next-step candidat
 
 ## Remaining Gaps
 
-* state consistency under user correction
 * dialogue-manager maturity
-* latency
 * fallback quality
 * production-grade evaluation
 * cloud secrets and access hardening
