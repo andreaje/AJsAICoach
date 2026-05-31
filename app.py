@@ -39,21 +39,27 @@ def require_authentication():
 
     gate = st.empty()
     with gate.container():
-        st.title("AJ's AI Coach")
+        st.title("🌴 AJ's AI Coach")
         st.subheader("Demo access required")
         st.caption("Enter the prototype access code to continue.")
-        st.markdown(
-            """
-            <style>
-            input[aria-label="Prototype Access Code"] {
-                -webkit-text-security: disc;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
+        show_access_code = st.toggle("Show access code", key="show_access_code")
+        if not show_access_code:
+            st.markdown(
+                """
+                <style>
+                input[aria-label="Prototype Access Code"] {
+                    -webkit-text-security: disc;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
         with st.form("prototype_access_form"):
-            entered_access_code = st.text_input("Prototype Access Code", autocomplete="one-time-code")
+            entered_access_code = st.text_input(
+                "Prototype Access Code",
+                autocomplete="one-time-code",
+                key="prototype_access_code",
+            )
             submitted = st.form_submit_button("Enter")
     if submitted:
         if hmac.compare_digest(entered_access_code, app_password):
@@ -66,12 +72,10 @@ def require_authentication():
 
 require_authentication()
 
-st.title("🌴 AJ's AI Coach")
 if "language" not in st.session_state:
     st.session_state.language = "en"
 
 lang = st.session_state.language
-st.caption(t("app_caption", lang))
 
 ASSISTANT_AVATAR = "✨"
 MOCK_DATA_SCHEMA_VERSION = 6
@@ -590,24 +594,25 @@ def render_sidebar():
         st.session_state.clear()
         st.rerun()
 
-    context = st.session_state.conversation_context
-    st.header(t("customer_understanding", lang))
-    sidebar_fields = {
-        t("primary_topic", lang): context["primary_topic"] or "None",
-        t("parent_topic", lang): context["parent_topic"] or "None",
-        t("resolved_reference", lang): context["resolved_reference"],
-        t("current_goal", lang): context["current_goal"],
-        t("current_fear", lang): context["current_fear"],
-        t("persona", lang): context["persona"],
-        t("knowledge_level", lang): context["knowledge_level"],
-        t("knowledge_level_confidence", lang): context["knowledge_level_confidence"],
-        t("knowledge_level_evidence", lang): context["knowledge_level_evidence"],
-        t("financial_situation_confidence", lang): context["confidence_level"],
-        t("coaching_style", lang): context["coaching_style"],
-        t("risk_level", lang): context["risk_level"],
-    }
-    for label, value in sidebar_fields.items():
-        st.markdown(f"**{label}:** {value}")
+    if st.session_state.get("debug_mode"):
+        context = st.session_state.conversation_context
+        st.header("Customer Understanding")
+        sidebar_fields = {
+            "Primary Topic": context["primary_topic"] or "None",
+            "Parent Topic": context["parent_topic"] or "None",
+            "Resolved Reference": context["resolved_reference"],
+            "Current Goal": context["current_goal"],
+            "Current Fear": context["current_fear"],
+            "Persona": context["persona"],
+            "Knowledge Level": context["knowledge_level"],
+            "Knowledge Level Confidence": context["knowledge_level_confidence"],
+            "Knowledge Level Evidence": context["knowledge_level_evidence"],
+            "Financial Situation Confidence": context["confidence_level"],
+            "Coaching Style": context["coaching_style"],
+            "Risk Level": context["risk_level"],
+        }
+        for label, value in sidebar_fields.items():
+            st.markdown(f"**{label}:** {value}")
     if st.button(t("reset_conversation", lang)):
         reset_conversation()
 
@@ -674,16 +679,53 @@ _, openai_api_key_source = resolve_openai_api_key(
 )
 openai_key_debug = get_openai_key_debug(openai_api_key_source)
 
-active_view = st.radio(
-    "View",
-    ["coach", "conversational_understanding", "business_metrics", "system_metrics", "architectural_design_log"],
-    format_func=lambda view: "Architectural Design Log" if view == "architectural_design_log" else t(view, lang),
-    horizontal=True,
-    label_visibility="collapsed",
-    key="active_view",
+st.markdown(
+    """
+    <style>
+    .st-key-app_shell_header {
+        position: sticky;
+        top: 2.75rem;
+        z-index: 999;
+        background: var(--background-color);
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
+with st.container(key="app_shell_header"):
+    st.title("🌴 AJ's AI Coach")
+    st.caption(t("app_caption", lang))
+    active_view = st.radio(
+        "View",
+        ["coach", "conversational_understanding", "business_metrics", "system_metrics", "architectural_design_log"],
+        format_func=lambda view: "Architectural Design Log" if view == "architectural_design_log" else t(view, lang),
+        horizontal=True,
+        label_visibility="collapsed",
+        key="active_view",
+    )
 
 if active_view == "coach":
+    st.markdown(
+        """
+        <style>
+        [data-testid="stMain"] {
+            overflow: hidden;
+        }
+        [data-testid="stMainBlockContainer"] {
+            height: 100vh;
+            max-height: 100vh;
+            overflow: hidden;
+            padding-top: 3.75rem;
+            padding-bottom: 0.75rem;
+        }
+        .st-key-conversation_scroll {
+            height: calc(100vh - 16rem) !important;
+            min-height: 16rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     conversation_scroll = st.container(
         key="conversation_scroll",
         height=480,
