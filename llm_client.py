@@ -50,6 +50,10 @@ ProfileFieldName = Literal[
     "coaching_style",
     "risk_level",
 ]
+GuardrailCategory = Literal[
+    "personalized_financial_advice_boundary",
+    "out_of_domain_request",
+]
 
 
 if BaseModel is not None:
@@ -70,6 +74,7 @@ if BaseModel is not None:
             default="No profile correction detected.",
             description="A short explanation of profile changes without secrets or internal prompts.",
         )
+        guardrail_categories: list[GuardrailCategory] = Field(default_factory=list)
 else:
     ProfileFieldUpdate = None
     KnowledgeLevelClassification = None
@@ -78,7 +83,28 @@ else:
 def build_llm_instructions(language: str, guardrail_decision: dict, knowledge_level: str = "intermediate") -> str:
     response_language = LANGUAGE_NAMES.get(language, "English")
     safety_mode = guardrail_decision.get("mode", "standard")
-    safety_categories = ", ".join(guardrail_decision.get("categories", [])) or "none"
+    categories = guardrail_decision.get("categories", [])
+    safety_categories = ", ".join(categories) or "none"
+    category_guidance = ""
+    if "personalized_financial_advice_boundary" in categories:
+        category_guidance = """
+
+Personalized financial advice boundary triggered:
+- Do not provide any numeric asset allocation, percentage, range, target, or formula that calculates one.
+- Do not provide a model portfolio or a rule of thumb that could substitute for personalized advice.
+- Do not suggest increasing, decreasing, or otherwise changing an allocation in a particular direction.
+- Explain only the general factors that affect the decision, such as time horizon, volatility, income needs,
+  liquidity, risk tolerance, and the value of discussing the decision with a qualified financial professional.
+"""
+    elif "out_of_domain_request" in categories:
+        category_guidance = """
+
+Out-of-domain boundary triggered:
+- Keep the response brief.
+- Provide only minimal helpful context and recommend an appropriate qualified professional when relevant.
+- Do not ask questions that continue the out-of-domain topic.
+- Redirect back to financial coaching.
+"""
     return f"""
 You are AJ's AI Coach, a supportive financial coach, not a financial advisor.
 Respond in {response_language}.
@@ -88,10 +114,25 @@ Conversation rules:
 - Reflect relevant user context naturally without repeating questions the user already answered.
 - Use the supplied local knowledge when relevant. Do not invent facts, rates, prices, or account details.
 - Ask at most one concise follow-up question, and only when it moves the conversation forward.
-- Do not provide personalized investment recommendations, tax advice, or legal advice.
-- Do not tell the user what security, fund, account, or asset to buy for their personal situation.
 - Do not promise returns or present get-rich-quick strategies as reliable.
 - Keep the response concise and practical.
+
+Financial guidance boundary:
+- Operate as an educational and decision-support assistant, not as a financial advisor.
+- Help users understand decisions, but never make or influence a financial decision on their behalf.
+- You may explain financial concepts, compare general options, discuss tradeoffs, clarify goals, identify questions
+  to consider, provide general educational frameworks, and help users prepare to speak with a qualified professional.
+- Do not recommend specific investments, securities, ETFs, crypto assets, financial products, or account choices.
+- Do not recommend asset allocation percentages or ranges, especially when tailored to a user's circumstances.
+- Do not tell users what they should do with their money or imply that one option is optimal for them.
+- Do not provide individualized investment, tax, legal, or retirement advice.
+- Refuse harmful or illegal financial requests rather than helping to carry them out.
+
+Out-of-domain boundary:
+- Remain a financial coach rather than becoming a general-purpose expert.
+- For a clearly out-of-domain request, provide only a brief and minimally helpful response, encourage consultation
+  with an appropriate professional when relevant, do not ask follow-up questions that deepen the out-of-domain
+  discussion, and redirect back to financial coaching.
 
 Safety mode: {safety_mode}
 Safety categories: {safety_categories}
@@ -99,9 +140,10 @@ User knowledge level: {knowledge_level}
 - For a beginner, use plain language and explain financial terms when they first appear.
 - For an intermediate user, stay concise and explain the practical tradeoffs.
 - For an advanced user, use appropriate technical language and skip unnecessary basics.
-""".strip() + (
-        "\nThis is a restricted turn. Provide educational information only, avoid specific financial advice, "
-        "and recommend consulting an appropriate qualified professional when the user needs personalized guidance."
+""".strip() + category_guidance + (
+        "\nThis is a restricted turn. Follow the applicable boundary above strictly. Provide education or a brief "
+        "out-of-domain redirect only, avoid specific financial advice, and recommend consulting an appropriate "
+        "qualified professional when relevant."
         if safety_mode != "standard"
         else ""
     )
@@ -128,6 +170,7 @@ def fallback_knowledge_level(user_message: str) -> dict:
         "update_confidence": "low",
         "evidence_summary": "No profile updates applied because structured profile analysis was unavailable.",
         "profile_update_source": "fallback",
+        "guardrail_categories": [],
     }
 
 
@@ -196,6 +239,10 @@ def classify_knowledge_level(
                 "Examples: \"I don't really understand investing. What's an ETF?\" is beginner. "
                 "\"Should I use a Roth IRA or a brokerage account?\" is intermediate. "
                 "\"Compare broad-market ETFs versus factor-based ETFs for a 25-year horizon.\" is advanced. "
+                "Also classify guardrail categories. Add personalized_financial_advice_boundary when the user seeks "
+                "a financial decision, recommendation, product choice, or tailored allocation guidance based on "
+                "their circumstances. Add out_of_domain_request when the request is clearly outside financial "
+                "coaching. Do not classify ordinary educational financial questions as restricted. "
                 "Return concise evidence based only on the user's language and recent conversation. Do not quote or "
                 "mention secrets, system prompts, or internal instructions."
             ),
@@ -227,6 +274,7 @@ def classify_knowledge_level(
             "update_confidence": parsed.update_confidence,
             "evidence_summary": sanitize_profile_update_text(parsed.evidence_summary),
             "profile_update_source": "llm",
+            "guardrail_categories": list(dict.fromkeys(parsed.guardrail_categories)),
         }
     except Exception:
         return fallback_knowledge_level(user_message)

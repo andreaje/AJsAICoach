@@ -797,7 +797,10 @@ if active_view == "coach":
                     retrieval_ms = (perf_counter() - retrieval_started) * 1000
 
                     guardrails_started = perf_counter()
-                    guardrail_result = evaluate_guardrails(prompt)
+                    guardrail_result = evaluate_guardrails(
+                        prompt,
+                        knowledge_level.get("guardrail_categories"),
+                    )
                     guardrails_ms = (perf_counter() - guardrails_started) * 1000
 
                     openai_started = perf_counter()
@@ -838,6 +841,7 @@ if active_view == "coach":
             "invalidated_fields": knowledge_level["field_invalidations"],
             "unchanged_fields": knowledge_level["unchanged_fields"],
             "update_confidence": knowledge_level["update_confidence"],
+            "guardrail_triggered": guardrail_result["guardrail_triggered"],
             "OPENAI_API_KEY detected": response_details["openai_api_key_detected"],
             "OPENAI_API_KEY source": response_details["openai_api_key_source"],
             "openai_model": response_details["openai_model"],

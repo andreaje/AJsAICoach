@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import llm_client
+from guardrails import evaluate_guardrails, guardrail_message
 
 
 UNDERSTANDING = {
@@ -26,6 +27,7 @@ class GenerateLlmResponseTests(unittest.TestCase):
             knowledge_level="advanced",
             knowledge_level_confidence="high",
             evidence="The user compares broad-market and factor-based ETFs over a long horizon.",
+            guardrail_categories=[],
         )
         parse = Mock(return_value=SimpleNamespace(output_parsed=classification))
         client = SimpleNamespace(responses=SimpleNamespace(parse=parse))
@@ -43,6 +45,7 @@ class GenerateLlmResponseTests(unittest.TestCase):
         self.assertEqual(result["knowledge_level"], "advanced")
         self.assertEqual(result["knowledge_level_confidence"], "high")
         self.assertEqual(result["knowledge_level_source"], "llm")
+        self.assertEqual(result["guardrail_categories"], [])
         self.assertIn("factor-based ETFs", result["evidence"])
         self.assertEqual(parse.call_args.kwargs["text_format"], llm_client.KnowledgeLevelClassification)
 
@@ -227,12 +230,44 @@ class GenerateLlmResponseTests(unittest.TestCase):
     def test_restricted_turn_instructions_require_educational_response(self):
         instructions = llm_client.build_llm_instructions(
             "en",
-            {"mode": "educational_only", "categories": ["personalized_investment_advice"]},
+            {"mode": "educational_only", "categories": ["personalized_financial_advice_boundary"]},
         )
 
         self.assertIn("restricted turn", instructions)
-        self.assertIn("Provide educational information only", instructions)
+        self.assertIn("Do not recommend asset allocation percentages or ranges", instructions)
+        self.assertIn("Do not provide any numeric asset allocation, percentage, range, target, or formula", instructions)
+        self.assertIn("Do not suggest increasing, decreasing, or otherwise changing an allocation", instructions)
         self.assertIn("qualified professional", instructions)
+
+    def test_guardrails_use_structured_llm_categories_for_personalized_allocation_boundary(self):
+        result = evaluate_guardrails(
+            "I have retirement savings and a five-year horizon. What percentage should be in stocks?",
+            ["personalized_financial_advice_boundary"],
+        )
+
+        self.assertEqual(result["mode"], "educational_only")
+        self.assertEqual(result["guardrail_triggered"], "personalized_financial_advice_boundary")
+        self.assertIn("specific choice, percentage, or range", guardrail_message(result))
+
+    def test_guardrails_use_structured_llm_categories_for_out_of_domain_requests(self):
+        result = evaluate_guardrails(
+            "This is outside financial coaching.",
+            ["out_of_domain_request"],
+        )
+
+        self.assertEqual(result["mode"], "educational_only")
+        self.assertEqual(result["guardrail_triggered"], "out_of_domain_request")
+        self.assertIn("primarily here to help with financial questions", guardrail_message(result))
+
+    def test_llm_instructions_keep_out_of_domain_response_brief_and_redirect(self):
+        instructions = llm_client.build_llm_instructions(
+            "en",
+            {"mode": "educational_only", "categories": ["out_of_domain_request"]},
+        )
+
+        self.assertIn("brief and minimally helpful response", instructions)
+        self.assertIn("redirect back to financial coaching", instructions)
+        self.assertIn("do not ask follow-up questions that deepen", instructions)
 
     def test_escalation_fallback_recommends_qualified_professional(self):
         with patch.dict(os.environ, {}, clear=True):
