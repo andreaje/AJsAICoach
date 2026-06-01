@@ -147,8 +147,7 @@ def render_architectural_design_log():
     if not design_log.strip():
         st.info("The architectural design log is currently empty.")
         return
-    with st.container(key="architectural_design_log", height=480, border=False):
-        st.markdown(design_log)
+    st.markdown(design_log)
 
 
 def reset_conversation():
@@ -682,11 +681,26 @@ openai_key_debug = get_openai_key_debug(openai_api_key_source)
 st.markdown(
     """
     <style>
+    [data-testid="stMain"] {
+        overflow: hidden;
+    }
+    [data-testid="stMainBlockContainer"] {
+        height: 100vh;
+        max-height: 100vh;
+        overflow: hidden;
+        padding-top: 3.75rem;
+        padding-bottom: 0.75rem;
+    }
     .st-key-app_shell_header {
-        position: sticky;
-        top: 2.75rem;
-        z-index: 999;
         background: var(--background-color);
+        padding-bottom: 0.35rem;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.35);
+        margin-bottom: 0.75rem;
+    }
+    .st-key-conversation_scroll,
+    .st-key-view_content_scroll {
+        height: calc(100vh - 16rem) !important;
+        min-height: 16rem;
     }
     </style>
     """,
@@ -705,27 +719,6 @@ with st.container(key="app_shell_header"):
     )
 
 if active_view == "coach":
-    st.markdown(
-        """
-        <style>
-        [data-testid="stMain"] {
-            overflow: hidden;
-        }
-        [data-testid="stMainBlockContainer"] {
-            height: 100vh;
-            max-height: 100vh;
-            overflow: hidden;
-            padding-top: 3.75rem;
-            padding-bottom: 0.75rem;
-        }
-        .st-key-conversation_scroll {
-            height: calc(100vh - 16rem) !important;
-            min-height: 16rem;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     conversation_scroll = st.container(
         key="conversation_scroll",
         height=480,
@@ -874,14 +867,13 @@ if active_view == "coach":
         )
         st.rerun()
 
-elif active_view == "conversational_understanding":
-    render_understanding_tab()
-
-elif active_view == "business_metrics":
-    render_business_metrics()
-
-elif active_view == "system_metrics":
-    render_system_metrics()
-
-elif active_view == "architectural_design_log":
-    render_architectural_design_log()
+else:
+    with st.container(key="view_content_scroll", height=480, border=False):
+        if active_view == "conversational_understanding":
+            render_understanding_tab()
+        elif active_view == "business_metrics":
+            render_business_metrics()
+        elif active_view == "system_metrics":
+            render_system_metrics()
+        elif active_view == "architectural_design_log":
+            render_architectural_design_log()
